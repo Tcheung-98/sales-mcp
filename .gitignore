@@ -1,0 +1,31 @@
+# Virtual environments
+.venv/
+venv/
+env/
+.env
+.env.*
+
+# Logs
+*.log
+logs/
+
+# Credentials and service accounts (never commit)
+*credentials*.json
+*service-account*.json
+*credentials*.yaml
+*-key.json
+**/service-accounts/
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.Python
+*.egg-info/
+.eggs/
+dist/
+build/
+
+# OS / IDE
+.DS_Store
+.idea/
