@@ -16,6 +16,11 @@ logs/
 *-key.json
 **/service-accounts/
 
+# Deployment config with injected secrets — use containers.json.template instead
+containers.json
+deploy.json
+public-endpoint.json
+
 # Python
 __pycache__/
 *.py[cod]

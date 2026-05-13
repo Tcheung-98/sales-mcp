@@ -1,0 +1,11 @@
+{
+    "mcp": {
+      "image": ":fortune-sales-mcp.vX.Y",
+      "environment": {
+        "MCP_SHARED_SECRET": "REPLACE_WITH_OUTPUT_OF_openssl_rand_-hex_32"
+      },
+      "ports": {
+        "8000": "HTTP"
+      }
+    }
+  }
