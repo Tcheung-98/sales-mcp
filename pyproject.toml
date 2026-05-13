@@ -12,5 +12,25 @@ dependencies = [
     "mcp[cli]==1.27.1",
 ]
 
+[dependency-groups]
+dev = [
+    "ruff>=0.9",
+    "mypy>=1.13",
+    "pytest>=8.3",
+]
+
 [tool.setuptools]
 py-modules = ["server"]
+
+[tool.ruff]
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I"]
+
+[tool.mypy]
+python_version = "3.12"
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
