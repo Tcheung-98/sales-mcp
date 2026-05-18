@@ -21,6 +21,14 @@ uv sync
 uv run uvicorn server:app --reload --port 8000
 ```
 
+To test tools interactively, point MCP Inspector at the local server:
+
+```bash
+npx @modelcontextprotocol/inspector http://localhost:8000/mcp
+```
+
+The inspector runs in your browser and lets you call tools manually without writing curl commands. Set the `Authorization` header to `Bearer <MCP_SHARED_SECRET>` in the inspector's auth settings.
+
 ## Deploy
 
 ```bash
@@ -76,3 +84,13 @@ curl -s -X POST https://fortune-sales-mcp.tj3ek8xjdg9br.us-east-1.cs.amazonlight
 ```bash
 curl https://fortune-sales-mcp.tj3ek8xjdg9br.us-east-1.cs.amazonlightsail.com/health
 ```
+
+## Architecture decisions
+
+**Python + FastMCP** — MCP's official Python SDK (`mcp[cli]`). The standalone `fastmcp` PyPI package is not used; the SDK ships `mcp.server.fastmcp.FastMCP` directly.
+
+**Streamable HTTP transport (not SSE)** — SSE was dropped because Lightsail's load balancer rewrites the `Host` header, causing the MCP SDK's DNS-rebinding protection to reject every request with 421. Streamable HTTP sidesteps this; DNS-rebinding protection is disabled at the SDK level via `TransportSecuritySettings` since the LB is already the trust boundary.
+
+**AWS Lightsail container (not Lambda + Amplify)** — the MCP server is a long-running stateful process that holds SSE connections open. Lambda's execution model (short-lived, request/response) is a poor fit. Lightsail gives a persistent container with a public HTTPS endpoint and no cold-start latency.
+
+**v0 scope** — RAG retrieval and rate-card lookup only. LLM inference happens in Cowork via its native pptx skill; the server does not make Claude API calls. S3 is the storage layer for the deck corpus; no DynamoDB in v0.

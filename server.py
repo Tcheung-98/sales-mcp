@@ -1,5 +1,7 @@
 import os
 
+import boto3
+from botocore.exceptions import BotoCoreError, ClientError
 from mcp.server.fastmcp import FastMCP
 from mcp.server.fastmcp.server import TransportSecuritySettings
 from starlette.middleware.base import BaseHTTPMiddleware
@@ -11,7 +13,7 @@ _EXPECTED_TOKEN = os.environ.get("MCP_SHARED_SECRET")
 
 class AuthMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request, call_next):
-        if request.url.path == "/health":
+        if request.url.path in ("/health", "/secrets-check"):
             return await call_next(request)
         # Fail closed if the secret was never injected into the environment.
         if not _EXPECTED_TOKEN:
@@ -42,13 +44,25 @@ def hello(name: str) -> str:
     """Sanity check tool."""
     return f"Hello, {name}!"
 
-# Plain HTTP endpoint for Lightsail's health checks.
 async def health(request):
     return JSONResponse({"status": "ok"})
+
+# Temporary to test IAM deployment and permissions. Will delete after confirming the secret check.
+async def secrets_check(request):
+    secret_name = "fortune-sales-mcp/claude-api-key"
+    try:
+        client = boto3.client("secretsmanager", region_name="us-east-1")
+        client.get_secret_value(SecretId=secret_name)
+        return JSONResponse({"status": "ok", "secret": secret_name})
+    except ClientError as e:
+        return JSONResponse({"status": "error", "detail": str(e)}, status_code=500)
+    except BotoCoreError as e:
+        return JSONResponse({"status": "error", "detail": str(e)}, status_code=500)
 
 app = mcp.streamable_http_app()
 
 app.routes.append(Route("/health", health))
+app.routes.append(Route("/secrets-check", secrets_check))
 app.add_middleware(AuthMiddleware)
 
 if __name__ == "__main__":
