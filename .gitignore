@@ -34,3 +34,6 @@ build/
 # OS / IDE
 .DS_Store
 .idea/
+
+# Plan Files
+*-plan.md
