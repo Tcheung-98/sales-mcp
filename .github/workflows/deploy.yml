@@ -45,6 +45,8 @@ jobs:
       - name: Deploy
         env:
           MCP_SHARED_SECRET: ${{ secrets.MCP_SHARED_SECRET }}
+          RUNTIME_AWS_ACCESS_KEY_ID: ${{ secrets.RUNTIME_AWS_ACCESS_KEY_ID }}
+          RUNTIME_AWS_SECRET_ACCESS_KEY: ${{ secrets.RUNTIME_AWS_SECRET_ACCESS_KEY }}
           IMAGE_DIGEST: ${{ steps.push.outputs.image_digest }}
         run: |
           cat > containers.json << EOF
@@ -52,7 +54,10 @@ jobs:
             "mcp": {
               "image": "$IMAGE_DIGEST",
               "environment": {
-                "MCP_SHARED_SECRET": "$MCP_SHARED_SECRET"
+                "MCP_SHARED_SECRET": "$MCP_SHARED_SECRET",
+                "AWS_ACCESS_KEY_ID": "$RUNTIME_AWS_ACCESS_KEY_ID",
+                "AWS_SECRET_ACCESS_KEY": "$RUNTIME_AWS_SECRET_ACCESS_KEY",
+                "AWS_DEFAULT_REGION": "us-east-1"
               },
               "ports": {
                 "8000": "HTTP"
