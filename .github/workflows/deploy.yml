@@ -2,13 +2,23 @@ name: Deploy
 
 on:
   push:
-    branches: [main]
+    branches: [main, dev]
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
+      - name: Set environment variables
+        run: |
+          if [ "${{ github.ref_name }}" == "main" ]; then
+            echo "LIGHTSAIL_SERVICE=fortune-sales-mcp" >> "$GITHUB_ENV"
+            echo "MCP_SHARED_SECRET=${{ secrets.PROD_MCP_SHARED_SECRET }}" >> "$GITHUB_ENV"
+          else
+            echo "LIGHTSAIL_SERVICE=fortune-sales-mcp-dev" >> "$GITHUB_ENV"
+            echo "MCP_SHARED_SECRET=${{ secrets.DEV_MCP_SHARED_SECRET }}" >> "$GITHUB_ENV"
+          fi
 
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
@@ -35,7 +45,7 @@ jobs:
         run: |
           LABEL="sha-${GITHUB_SHA:0:7}"
           PUSH_OUTPUT=$(aws lightsail push-container-image \
-            --service-name fortune-sales-mcp \
+            --service-name "$LIGHTSAIL_SERVICE" \
             --label "$LABEL" \
             --image fortune-sales-ai-mcp:dev 2>&1)
           echo "$PUSH_OUTPUT"
@@ -44,7 +54,6 @@ jobs:
 
       - name: Deploy
         env:
-          MCP_SHARED_SECRET: ${{ secrets.MCP_SHARED_SECRET }}
           RUNTIME_AWS_ACCESS_KEY_ID: ${{ secrets.RUNTIME_AWS_ACCESS_KEY_ID }}
           RUNTIME_AWS_SECRET_ACCESS_KEY: ${{ secrets.RUNTIME_AWS_SECRET_ACCESS_KEY }}
           IMAGE_DIGEST: ${{ steps.push.outputs.image_digest }}
@@ -66,6 +75,6 @@ jobs:
           }
           EOF
           aws lightsail create-container-service-deployment \
-            --service-name fortune-sales-mcp \
+            --service-name "$LIGHTSAIL_SERVICE" \
             --containers file://containers.json \
             --public-endpoint '{"containerName":"mcp","containerPort":8000,"healthCheck":{"path":"/","successCodes":"200-499"}}'
