@@ -1,8 +1,9 @@
+import logging
 import os
 import time
-import logging
-import requests
+
 import msal
+import requests
 
 from ingestion.models import Tags
 
@@ -46,7 +47,9 @@ class GraphClient:
             resp = self._session.get(url, headers=headers, params=params)
             if resp.status_code == 429:
                 wait = float(resp.headers.get("Retry-After", delay))
-                logger.warning("rate limited by Graph API — waiting %.1fs (attempt %d)", wait, attempt + 1)
+                logger.warning(
+                    "rate limited by Graph API — waiting %.1fs (attempt %d)", wait, attempt + 1
+                )
                 time.sleep(wait)
                 delay = min(delay * 2, 60)
                 continue
@@ -100,5 +103,10 @@ class GraphClient:
                 # GTM Current subfolders = industry verticals (source of truth)
                 for industry_folder in self._folder_children(item["id"]):
                     if "folder" in industry_folder:
-                        self._walk_folder(industry_folder["id"], industry=industry_folder["name"], sub_industry="", results=results)
+                        self._walk_folder(
+                            industry_folder["id"],
+                            industry=industry_folder["name"],
+                            sub_industry="",
+                            results=results,
+                        )
         return results

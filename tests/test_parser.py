@@ -1,9 +1,9 @@
 import io
-import pytest
-from datetime import datetime
+
 from pptx import Presentation
-from ingestion.parser import parse_pptx, content_hash
+
 from ingestion.models import Tags
+from ingestion.parser import content_hash, parse_pptx
 
 
 def make_pptx(slides: list[dict]) -> bytes:
@@ -30,7 +30,9 @@ SAMPLE_TAGS = Tags(industry="Tech")
 
 # happy path
 def test_single_slide_returns_one_sliderow():
-    pptx_bytes = make_pptx([{"title": "Overview", "body": "Q1 Revenue up 15%", "notes": "Discuss YoY growth"}])
+    pptx_bytes = make_pptx([
+        {"title": "Overview", "body": "Q1 Revenue up 15%", "notes": "Discuss YoY growth"},
+    ])
 
     rows = parse_pptx(
         pptx_bytes=pptx_bytes,

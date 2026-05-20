@@ -1,6 +1,7 @@
-import os
-import pytest
 from unittest.mock import MagicMock
+
+import pytest
+
 from ingestion.graph_client import GraphClient
 
 
@@ -117,11 +118,15 @@ def test_list_decks_ignores_non_gtm_current_folders(client, mocker):
 def test_list_decks_industry_from_folder_name(client, mocker):
     def fake_get(url, params=None, max_retries=5):
         if "root/children" in url:
-            return {"value": [{"id": "folder-gtm", "name": "GTM Current (Q4 '24 - Forward)", "folder": {}}]}
+            return {"value": [
+                {"id": "folder-gtm", "name": "GTM Current (Q4 '24 - Forward)", "folder": {}},
+            ]}
         if "folder-gtm" in url:
             return {"value": [{"id": "folder-tech", "name": "Technology", "folder": {}}]}
         if "folder-tech" in url:
-            return {"value": [{"id": "d1", "name": "pitch.pptx", "file": {}, "webUrl": "/Technology/pitch.pptx"}]}
+            return {"value": [
+                {"id": "d1", "name": "pitch.pptx", "file": {}, "webUrl": "/Technology/pitch.pptx"},
+            ]}
         return {"value": []}
 
     mocker.patch.object(client, "_get", side_effect=fake_get)
@@ -138,13 +143,18 @@ def test_list_decks_industry_from_folder_name(client, mocker):
 def test_list_decks_sub_industry_from_nested_folder(client, mocker):
     def fake_get(url, params=None, max_retries=5):
         if "root/children" in url:
-            return {"value": [{"id": "folder-gtm", "name": "GTM Current (Q4 '24 - Forward)", "folder": {}}]}
+            return {"value": [
+                {"id": "folder-gtm", "name": "GTM Current (Q4 '24 - Forward)", "folder": {}},
+            ]}
         if "folder-gtm" in url:
             return {"value": [{"id": "folder-tech", "name": "Technology", "folder": {}}]}
         if "folder-tech" in url:
             return {"value": [{"id": "folder-client", "name": "Tech_Client Pitches", "folder": {}}]}
         if "folder-client" in url:
-            return {"value": [{"id": "d1", "name": "pitch.pptx", "file": {}, "webUrl": "/Technology/Tech_Client Pitches/pitch.pptx"}]}
+            return {"value": [
+                {"id": "d1", "name": "pitch.pptx", "file": {},
+                 "webUrl": "/Technology/Tech_Client Pitches/pitch.pptx"},
+            ]}
         return {"value": []}
 
     mocker.patch.object(client, "_get", side_effect=fake_get)
@@ -160,7 +170,9 @@ def test_list_decks_sub_industry_from_nested_folder(client, mocker):
 def test_list_decks_does_not_recurse_beyond_two_levels(client, mocker):
     def fake_get(url, params=None, max_retries=5):
         if "root/children" in url:
-            return {"value": [{"id": "folder-gtm", "name": "GTM Current (Q4 '24 - Forward)", "folder": {}}]}
+            return {"value": [
+                {"id": "folder-gtm", "name": "GTM Current (Q4 '24 - Forward)", "folder": {}},
+            ]}
         if "folder-gtm" in url:
             return {"value": [{"id": "folder-tech", "name": "Technology", "folder": {}}]}
         if "folder-tech" in url:
@@ -199,7 +211,9 @@ def test_extract_tags_content_sub_industry_has_empty_deck_type(client):
 def test_list_decks_ignores_non_pptx_files(client, mocker):
     def fake_get(url, params=None, max_retries=5):
         if "root/children" in url:
-            return {"value": [{"id": "folder-gtm", "name": "GTM Current (Q4 '24 - Forward)", "folder": {}}]}
+            return {"value": [
+                {"id": "folder-gtm", "name": "GTM Current (Q4 '24 - Forward)", "folder": {}},
+            ]}
         if "folder-gtm" in url:
             return {"value": [{"id": "folder-tech", "name": "Technology", "folder": {}}]}
         if "folder-tech" in url:

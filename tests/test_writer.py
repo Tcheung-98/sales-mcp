@@ -1,12 +1,12 @@
 import io
 import json
-import pytest
+from unittest.mock import MagicMock
+
 import pyarrow.parquet as pq
-from unittest.mock import MagicMock, call
+import pytest
 
 from ingestion.models import FailedRecord, SlideRow, Tags
 from ingestion.writer import S3ParquetWriter
-
 
 # --- fixtures ---
 
@@ -68,7 +68,9 @@ def test_write_decks_parquet_schema(writer):
     def fake_put(**kwargs):
         captured["body"] = kwargs["Body"]
 
-    writer._s3.put_object = MagicMock(side_effect=lambda **kw: captured.update({"body": kw["Body"]}))
+    writer._s3.put_object = MagicMock(
+        side_effect=lambda **kw: captured.update({"body": kw["Body"]})
+    )
     writer.write_decks([SAMPLE_SLIDE], run_ts="2026-05-19T10:00:00Z")
 
     table = pq.read_table(io.BytesIO(captured["body"]))
@@ -83,7 +85,9 @@ def test_write_decks_parquet_schema(writer):
 # so we serialize to JSON strings for Parquet compatibility.
 def test_write_decks_serializes_nested_fields_as_json(writer):
     captured = {}
-    writer._s3.put_object = MagicMock(side_effect=lambda **kw: captured.update({"body": kw["Body"]}))
+    writer._s3.put_object = MagicMock(
+        side_effect=lambda **kw: captured.update({"body": kw["Body"]})
+    )
     writer.write_decks([SAMPLE_SLIDE], run_ts="2026-05-19T10:00:00Z")
 
     table = pq.read_table(io.BytesIO(captured["body"]))
@@ -124,7 +128,9 @@ def test_write_failed_returns_s3_uri(writer):
 def test_write_decks_multiple_rows(writer):
     slide2 = SAMPLE_SLIDE.model_copy(update={"slide_number": 2, "title": "Slide Two"})
     captured = {}
-    writer._s3.put_object = MagicMock(side_effect=lambda **kw: captured.update({"body": kw["Body"]}))
+    writer._s3.put_object = MagicMock(
+        side_effect=lambda **kw: captured.update({"body": kw["Body"]})
+    )
     writer.write_decks([SAMPLE_SLIDE, slide2], run_ts="2026-05-19T10:00:00Z")
 
     table = pq.read_table(io.BytesIO(captured["body"]))

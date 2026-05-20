@@ -1,15 +1,21 @@
 import re
-import pytest
 from unittest.mock import MagicMock, patch
+
+import pytest
 
 from ingestion.ingestor import run_ingest
 from ingestion.models import SlideRow, Tags
 
-
 SAMPLE_TAGS = Tags(industry="TechMedia", sub_industry="B2B")
 
-DECK_ITEM_1 = {"id": "deck-1", "name": "pitch.pptx", "webUrl": "/TechMedia/pitch.pptx", "_industry": "TechMedia", "_sub_industry": "B2B"}
-DECK_ITEM_2 = {"id": "deck-2", "name": "brief.pptx", "webUrl": "/TechMedia/brief.pptx", "_industry": "TechMedia", "_sub_industry": "B2B"}
+DECK_ITEM_1 = {
+    "id": "deck-1", "name": "pitch.pptx", "webUrl": "/TechMedia/pitch.pptx",
+    "_industry": "TechMedia", "_sub_industry": "B2B",
+}
+DECK_ITEM_2 = {
+    "id": "deck-2", "name": "brief.pptx", "webUrl": "/TechMedia/brief.pptx",
+    "_industry": "TechMedia", "_sub_industry": "B2B",
+}
 
 
 def make_slide(deck_id="deck-1", slide_number=1) -> SlideRow:

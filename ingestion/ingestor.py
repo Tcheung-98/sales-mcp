@@ -29,7 +29,10 @@ def run_ingest(
         try:
             pptx_bytes = client.download_deck(deck_id)
             tags = client.extract_tags(item)
-            rows = parse_pptx(pptx_bytes, deck_id=deck_id, source_path=source_path, ingested_at=run_ts, tags=tags)
+            rows = parse_pptx(
+                pptx_bytes, deck_id=deck_id, source_path=source_path,
+                ingested_at=run_ts, tags=tags,
+            )
             slides.extend(rows)
         except Exception as exc:
             logger.warning("deck %s failed: %s", deck_id, exc)
