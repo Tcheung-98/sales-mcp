@@ -1517,6 +1517,7 @@ dev = [
     { name = "mypy" },
     { name = "pytest" },
     { name = "pytest-mock" },
+    { name = "python-dotenv" },
     { name = "ruff" },
 ]
 
@@ -1535,6 +1536,7 @@ dev = [
     { name = "mypy", specifier = ">=1.13" },
     { name = "pytest", specifier = ">=8.3" },
     { name = "pytest-mock", specifier = ">=3.14" },
+    { name = "python-dotenv", specifier = ">=1.2.2" },
     { name = "ruff", specifier = ">=0.9" },
 ]
 
