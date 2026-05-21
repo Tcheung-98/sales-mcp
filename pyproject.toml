@@ -33,6 +33,7 @@ packages = ["ingestion"]
 
 [tool.ruff]
 line-length = 100
+exclude = ["ingestion/scratch*.py"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I"]
