@@ -124,6 +124,53 @@ def test_write_failed_returns_s3_uri(writer):
     assert uri == "s3://test-bucket/failed/2026-05-19T10:00:00Z/failed.parquet"
 
 
+# --- write_embeddings: uploads to correct S3 keys ---
+def test_write_embeddings_uses_correct_s3_keys(writer):
+    import numpy as np
+    vectors = np.zeros((3, 1024), dtype=np.float32)
+    meta = [{"deck_id": "d1", "slide_number": 1, "source_path": "/p.pptx"}] * 3
+    writer.write_embeddings(vectors, meta, run_ts="2026-05-21T00:00:00Z")
+
+    calls = writer._s3.put_object.call_args_list
+    keys = [c.kwargs["Key"] for c in calls]
+    assert "snapshots/2026-05-21T00:00:00Z/embeddings.npy" in keys
+    assert "snapshots/2026-05-21T00:00:00Z/embeddings_meta.parquet" in keys
+
+
+# --- write_embeddings: returns both S3 URIs ---
+def test_write_embeddings_returns_uris(writer):
+    import numpy as np
+    vectors = np.zeros((2, 1024), dtype=np.float32)
+    meta = [{"deck_id": "d1", "slide_number": i, "source_path": "/p.pptx"} for i in range(2)]
+    npy_uri, meta_uri = writer.write_embeddings(vectors, meta, run_ts="2026-05-21T00:00:00Z")
+    assert npy_uri == "s3://test-bucket/snapshots/2026-05-21T00:00:00Z/embeddings.npy"
+    assert meta_uri == "s3://test-bucket/snapshots/2026-05-21T00:00:00Z/embeddings_meta.parquet"
+
+
+# --- write_embeddings: meta parquet has correct columns ---
+def test_write_embeddings_meta_parquet_schema(writer):
+    import io
+    import numpy as np
+    import pyarrow.parquet as pq
+
+    vectors = np.zeros((1, 1024), dtype=np.float32)
+    meta = [{"deck_id": "d1", "slide_number": 1, "source_path": "/p.pptx"}]
+
+    captured = {}
+    orig_put = writer._s3.put_object
+
+    def capture_put(**kwargs):
+        if kwargs["Key"].endswith(".parquet"):
+            captured["body"] = kwargs["Body"]
+        return orig_put(**kwargs)
+
+    writer._s3.put_object = MagicMock(side_effect=capture_put)
+    writer.write_embeddings(vectors, meta, run_ts="2026-05-21T00:00:00Z")
+
+    table = pq.read_table(io.BytesIO(captured["body"]))
+    assert set(table.schema.names) >= {"deck_id", "slide_number", "source_path"}
+
+
 # --- write_decks: multiple rows all written ---
 def test_write_decks_multiple_rows(writer):
     slide2 = SAMPLE_SLIDE.model_copy(update={"slide_number": 2, "title": "Slide Two"})

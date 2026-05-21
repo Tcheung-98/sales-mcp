@@ -15,6 +15,7 @@ dependencies = [
     "msal>=1.28",
     "requests>=2.31",
     "pyarrow>=16",
+    "numpy>=2.2.6",
 ]
 
 [dependency-groups]
