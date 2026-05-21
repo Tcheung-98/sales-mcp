@@ -150,6 +150,7 @@ def test_write_embeddings_returns_uris(writer):
 # --- write_embeddings: meta parquet has correct columns ---
 def test_write_embeddings_meta_parquet_schema(writer):
     import io
+
     import numpy as np
     import pyarrow.parquet as pq
 

@@ -5,9 +5,8 @@ import numpy as np
 import pytest
 from botocore.exceptions import ClientError
 
-from ingestion.embedder import SlideEmbedder, _DIMENSIONS, _MAX_RETRIES
+from ingestion.embedder import _DIMENSIONS, _MAX_RETRIES, SlideEmbedder
 from ingestion.models import SlideRow, Tags
-
 
 # --- fixtures ---
 
