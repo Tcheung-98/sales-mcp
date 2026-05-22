@@ -1,6 +1,7 @@
 import re
 from unittest.mock import MagicMock, patch
 
+import numpy as np
 import pytest
 
 from ingestion.ingestor import run_ingest
@@ -47,27 +48,38 @@ def mock_writer():
     w = MagicMock()
     w.write_decks.return_value = "s3://bucket/snapshots/ts/decks.parquet"
     w.write_failed.return_value = None
+    w.write_embeddings.return_value = (
+        "s3://bucket/snapshots/ts/embeddings.npy",
+        "s3://bucket/snapshots/ts/embeddings_meta.parquet",
+    )
     return w
 
 
+@pytest.fixture
+def mock_embedder():
+    e = MagicMock()
+    e.embed_slides.return_value = (np.empty((0, 1024), dtype=np.float32), [])
+    return e
+
+
 # --- happy path: slide rows from all decks are collected and returned ---
-def test_happy_path_returns_all_slide_rows(mock_client, mock_writer):
+def test_happy_path_returns_all_slide_rows(mock_client, mock_writer, mock_embedder):
     slides_1 = [make_slide("deck-1", 1), make_slide("deck-1", 2)]
     slides_2 = [make_slide("deck-2", 1)]
 
     with patch("ingestion.ingestor.parse_pptx", side_effect=[slides_1, slides_2]):
-        slides, failed = run_ingest(client=mock_client, writer=mock_writer)
+        slides, failed = run_ingest(client=mock_client, writer=mock_writer, embedder=mock_embedder)
 
     assert len(slides) == 3
     assert len(failed) == 0
 
 
 # --- failed deck: FailedRecord has correct deck_id and error message ---
-def test_failed_deck_adds_failed_record(mock_client, mock_writer):
+def test_failed_deck_adds_failed_record(mock_client, mock_writer, mock_embedder):
     mock_client.download_deck.side_effect = [Exception("network error"), b"ok-bytes"]
 
     with patch("ingestion.ingestor.parse_pptx", return_value=[make_slide("deck-2", 1)]):
-        _, failed = run_ingest(client=mock_client, writer=mock_writer)
+        _, failed = run_ingest(client=mock_client, writer=mock_writer, embedder=mock_embedder)
 
     assert len(failed) == 1
     assert failed[0].deck_id == "deck-1"
@@ -75,46 +87,46 @@ def test_failed_deck_adds_failed_record(mock_client, mock_writer):
 
 
 # --- failed deck does not abort the run: other decks still processed ---
-def test_failed_deck_does_not_crash_run(mock_client, mock_writer):
+def test_failed_deck_does_not_crash_run(mock_client, mock_writer, mock_embedder):
     mock_client.download_deck.side_effect = [RuntimeError("boom"), b"ok-bytes"]
 
     with patch("ingestion.ingestor.parse_pptx", return_value=[make_slide("deck-2", 1)]):
-        slides, failed = run_ingest(client=mock_client, writer=mock_writer)
+        slides, failed = run_ingest(client=mock_client, writer=mock_writer, embedder=mock_embedder)
 
     assert len(slides) == 1
     assert len(failed) == 1
 
 
 # --- run_ts matches ISO 8601 UTC format (YYYY-MM-DDTHH:MM:SSZ) ---
-def test_run_ts_format(mock_client, mock_writer):
+def test_run_ts_format(mock_client, mock_writer, mock_embedder):
     mock_client.list_decks.return_value = []
 
-    run_ingest(client=mock_client, writer=mock_writer)
+    run_ingest(client=mock_client, writer=mock_writer, embedder=mock_embedder)
 
     _, kwargs = mock_writer.write_decks.call_args
     assert re.match(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$", kwargs["run_ts"])
 
 
 # --- source_path falls back to item["name"] when webUrl is absent ---
-def test_source_path_falls_back_to_name(mock_client, mock_writer):
+def test_source_path_falls_back_to_name(mock_client, mock_writer, mock_embedder):
     mock_client.list_decks.return_value = [
         {"id": "deck-1", "name": "fallback.pptx", "_industry": "TechMedia", "_sub_industry": ""}
     ]
     mock_client.download_deck.side_effect = Exception("forced")
 
-    _, failed = run_ingest(client=mock_client, writer=mock_writer)
+    _, failed = run_ingest(client=mock_client, writer=mock_writer, embedder=mock_embedder)
 
     assert len(failed) == 1
     assert failed[0].source_path == "fallback.pptx"
 
 
 # --- write_decks is called once with all collected slide rows ---
-def test_write_decks_called_with_all_rows(mock_client, mock_writer):
+def test_write_decks_called_with_all_rows(mock_client, mock_writer, mock_embedder):
     mock_client.list_decks.return_value = [DECK_ITEM_1]
     rows = [make_slide("deck-1", 1), make_slide("deck-1", 2)]
 
     with patch("ingestion.ingestor.parse_pptx", return_value=rows):
-        run_ingest(client=mock_client, writer=mock_writer)
+        run_ingest(client=mock_client, writer=mock_writer, embedder=mock_embedder)
 
     mock_writer.write_decks.assert_called_once()
     positional_rows = mock_writer.write_decks.call_args[0][0]
@@ -122,22 +134,34 @@ def test_write_decks_called_with_all_rows(mock_client, mock_writer):
 
 
 # --- write_failed is always called, even when no decks failed ---
-def test_write_failed_always_called(mock_client, mock_writer):
+def test_write_failed_always_called(mock_client, mock_writer, mock_embedder):
     mock_client.list_decks.return_value = []
 
-    run_ingest(client=mock_client, writer=mock_writer)
+    run_ingest(client=mock_client, writer=mock_writer, embedder=mock_embedder)
 
     mock_writer.write_failed.assert_called_once()
 
 
 # --- parse error (corrupt pptx) is captured as a FailedRecord, not a crash ---
-def test_parse_error_captured_as_failed_record(mock_client, mock_writer):
+def test_parse_error_captured_as_failed_record(mock_client, mock_writer, mock_embedder):
     mock_client.list_decks.return_value = [DECK_ITEM_1]
 
     with patch("ingestion.ingestor.parse_pptx", side_effect=ValueError("corrupt pptx")):
-        slides, failed = run_ingest(client=mock_client, writer=mock_writer)
+        slides, failed = run_ingest(client=mock_client, writer=mock_writer, embedder=mock_embedder)
 
     assert len(slides) == 0
     assert len(failed) == 1
     assert failed[0].deck_id == "deck-1"
     assert "corrupt pptx" in failed[0].error
+
+
+# --- embed_slides is called with all collected slide rows after write_decks ---
+def test_embed_slides_called_after_write_decks(mock_client, mock_writer, mock_embedder):
+    mock_client.list_decks.return_value = [DECK_ITEM_1]
+    rows = [make_slide("deck-1", 1)]
+
+    with patch("ingestion.ingestor.parse_pptx", return_value=rows):
+        run_ingest(client=mock_client, writer=mock_writer, embedder=mock_embedder)
+
+    mock_embedder.embed_slides.assert_called_once_with(rows)
+    mock_writer.write_embeddings.assert_called_once()

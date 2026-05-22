@@ -4,6 +4,7 @@ import logging
 import os
 
 import boto3
+import numpy as np
 import pyarrow as pa
 import pyarrow.parquet as pq
 
@@ -73,6 +74,29 @@ class S3ParquetWriter:
         table = pa.Table.from_pylist(records, schema=_DECKS_SCHEMA)
         key = f"{self._snapshot_prefix}/{run_ts}/decks.parquet"
         return self._upload(table, key)
+
+    def write_embeddings(
+        self, vectors: np.ndarray, meta: list[dict], run_ts: str
+    ) -> tuple[str, str]:
+        buf = io.BytesIO()
+        np.save(buf, vectors)
+        buf.seek(0)
+        npy_key = f"{self._snapshot_prefix}/{run_ts}/embeddings.npy"
+        self._s3.put_object(Bucket=self._bucket, Key=npy_key, Body=buf.getvalue())
+        npy_uri = f"s3://{self._bucket}/{npy_key}"
+        logger.info("wrote %d embedding vectors to %s", vectors.shape[0], npy_uri)
+
+        meta_table = pa.Table.from_pylist(
+            meta,
+            schema=pa.schema([
+                ("deck_id", pa.string()),
+                ("slide_number", pa.int32()),
+                ("source_path", pa.string()),
+            ]),
+        )
+        meta_key = f"{self._snapshot_prefix}/{run_ts}/embeddings_meta.parquet"
+        meta_uri = self._upload(meta_table, meta_key)
+        return npy_uri, meta_uri
 
     def write_failed(self, records: list[FailedRecord], run_ts: str) -> str | None:
         if not records:

@@ -37,8 +37,8 @@ build/
 
 # Plan Files
 *-plan.md
-*memory.md
+*memory*
+goals*
 
-# Scratch files
+# Scratch Files
 *scratch*
-

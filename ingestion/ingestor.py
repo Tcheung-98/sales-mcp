@@ -1,6 +1,7 @@
 import logging
 from datetime import datetime, timezone
 
+from ingestion.embedder import SlideEmbedder
 from ingestion.graph_client import GraphClient
 from ingestion.models import FailedRecord, SlideRow
 from ingestion.parser import parse_pptx
@@ -12,9 +13,11 @@ logger = logging.getLogger(__name__)
 def run_ingest(
     client: GraphClient | None = None,
     writer: S3ParquetWriter | None = None,
+    embedder: SlideEmbedder | None = None,
 ) -> tuple[list[SlideRow], list[FailedRecord]]:
     client = client or GraphClient()
     writer = writer or S3ParquetWriter()
+    embedder = embedder or SlideEmbedder()
 
     run_ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     decks = client.list_decks()
@@ -46,6 +49,8 @@ def run_ingest(
 
     writer.write_decks(slides, run_ts=run_ts)
     writer.write_failed(failed, run_ts=run_ts)
+    vectors, meta = embedder.embed_slides(slides)
+    writer.write_embeddings(vectors, meta, run_ts=run_ts)
     logger.info("ingest complete — %d slides, %d failed decks", len(slides), len(failed))
 
     return slides, failed
