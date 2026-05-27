@@ -272,14 +272,20 @@ _FILTER_DECKS = [
         "deck_id": "tech1", "slide_number": 1, "source_path": "/Technology/tech1.pptx",
         "content_hash": "a", "ingested_at": RUN_TS, "layout_name": "Title",
         "title": "Tech Pitch One", "body_text": json.dumps(["A"]),
-        "tags": _tags(industry="Technology", sub_industry="Enterprise SaaS", deck_type="Pitch", date="2026-01-15"),
+        "tags": _tags(
+            industry="Technology", sub_industry="Enterprise SaaS",
+            deck_type="Pitch", date="2026-01-15",
+        ),
         "tag_sources": None,
     },
     {
         "deck_id": "tech1", "slide_number": 2, "source_path": "/Technology/tech1.pptx",
         "content_hash": "b", "ingested_at": RUN_TS, "layout_name": "Content",
         "title": "Slide 2", "body_text": json.dumps(["B"]),
-        "tags": _tags(industry="Technology", sub_industry="Enterprise SaaS", deck_type="Pitch", date="2026-01-15"),
+        "tags": _tags(
+            industry="Technology", sub_industry="Enterprise SaaS",
+            deck_type="Pitch", date="2026-01-15",
+        ),
         "tag_sources": None,
     },
     # fin1: 1 slide, Finance / Proposal / 2026-03-10
@@ -295,7 +301,10 @@ _FILTER_DECKS = [
         "deck_id": "tech2", "slide_number": 1, "source_path": "/Technology/tech2.pptx",
         "content_hash": "d", "ingested_at": RUN_TS, "layout_name": "Title",
         "title": "Tech Pitch Two", "body_text": json.dumps(["D"]),
-        "tags": _tags(industry="Technology", sub_industry="Media", deck_type="Pitch", date="2025-11-20"),
+        "tags": _tags(
+            industry="Technology", sub_industry="Media",
+            deck_type="Pitch", date="2025-11-20",
+        ),
         "tag_sources": None,
     },
 ]
@@ -382,7 +391,9 @@ def test_filter_result_fields(filter_retriever):
 
 # --- slide_count reflects actual number of slides per deck ---
 def test_filter_slide_count_correct(filter_retriever):
-    results = filter_retriever.filter_decks_by_tags(industry="Technology", sub_industry="Enterprise SaaS")
+    results = filter_retriever.filter_decks_by_tags(
+        industry="Technology", sub_industry="Enterprise SaaS"
+    )
     assert results[0]["deck_id"] == "tech1"
     assert results[0]["slide_count"] == 2
 
