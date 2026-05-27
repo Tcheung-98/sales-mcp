@@ -98,6 +98,17 @@ class S3ParquetWriter:
         meta_uri = self._upload(meta_table, meta_key)
         return npy_uri, meta_uri
 
+    def write_latest_manifest(self, run_ts: str) -> str:
+        key = f"{self._snapshot_prefix}/latest.json"
+        self._s3.put_object(
+            Bucket=self._bucket,
+            Key=key,
+            Body=json.dumps({"run_ts": run_ts}).encode(),
+        )
+        s3_uri = f"s3://{self._bucket}/{key}"
+        logger.info("wrote latest manifest to %s", s3_uri)
+        return s3_uri
+
     def write_failed(self, records: list[FailedRecord], run_ts: str) -> str | None:
         if not records:
             return None
