@@ -73,3 +73,30 @@ class SlideRetriever:
             })
 
         return results
+
+    def get_slide_content(
+        self, deck_id: str, slide_numbers: list[int] | None = None
+    ) -> list[dict]:
+        if slide_numbers is None:
+            rows = sorted(
+                (v for (did, _), v in self._slides.items() if did == deck_id),
+                key=lambda r: r["slide_number"],
+            )
+        else:
+            rows = [
+                self._slides[(deck_id, sn)]
+                for sn in slide_numbers
+                if (deck_id, sn) in self._slides
+            ]
+
+        return [
+            {
+                "deck_id": row["deck_id"],
+                "slide_number": row["slide_number"],
+                "title": row.get("title"),
+                "body_text": row.get("body_text", []),
+                "layout_name": row.get("layout_name"),
+                "source_path": row["source_path"],
+            }
+            for row in rows
+        ]

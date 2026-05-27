@@ -44,6 +44,17 @@ def search_decks(query: str, k: int = 5) -> list[dict]:
     return _get_retriever().search(query, k=k)
 
 @mcp.tool()
+def get_slide_content(deck_id: str, slide_numbers: list[int] | None = None) -> list[dict]:
+    """
+    Retrieve full slide content (title, body text, layout) for a specific deck.
+    Call this after search_decks or filter_decks_by_tags returns a deck_id you want
+    to read in detail. Pass slide_numbers to fetch specific slides; omit to get every
+    slide in the deck. Returns an empty list if the deck_id is not found or the
+    requested slide numbers don't exist — never raises an error.
+    """
+    return _get_retriever().get_slide_content(deck_id, slide_numbers)
+
+@mcp.tool()
 def hello(name: str) -> str:
     """Sanity check tool."""
     return f"Hello, {name}!"
