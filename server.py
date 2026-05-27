@@ -44,6 +44,39 @@ def search_decks(query: str, k: int = 5) -> list[dict]:
     return _get_retriever().search(query, k=k)
 
 @mcp.tool()
+def filter_decks_by_tags(
+    industry: str | None = None,
+    sub_industry: str | None = None,
+    product_line: str | None = None,
+    deal_size: str | None = None,
+    client_name: str | None = None,
+    date_from: str | None = None,
+    date_to: str | None = None,
+    deck_type: str | None = None,
+    limit: int = 20,
+) -> list[dict]:
+    """
+    Filter Fortune sales decks by structured metadata tags. Use this when the account
+    executive specifies known criteria such as a specific industry, deck type, or date
+    range — for example "show me all Tech pitches from Q1" or "find Finance proposals".
+    All supplied filters apply with AND semantics; omit any filter to match any value.
+    Returns deck-level metadata (deck_id, title, tags, slide_count, source_path), not
+    slide content — follow up with get_slide_content to read the actual slides.
+    Use search_decks instead for open-ended natural-language queries.
+    """
+    return _get_retriever().filter_decks_by_tags(
+        industry=industry,
+        sub_industry=sub_industry,
+        product_line=product_line,
+        deal_size=deal_size,
+        client_name=client_name,
+        date_from=date_from,
+        date_to=date_to,
+        deck_type=deck_type,
+        limit=limit,
+    )
+
+@mcp.tool()
 def get_slide_content(deck_id: str, slide_numbers: list[int] | None = None) -> list[dict]:
     """
     Retrieve full slide content (title, body text, layout) for a specific deck.

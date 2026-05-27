@@ -1,6 +1,6 @@
 from unittest.mock import MagicMock
 
-from server import get_slide_content, hello, search_decks
+from server import filter_decks_by_tags, get_slide_content, hello, search_decks
 
 
 def test_hello():
@@ -33,3 +33,16 @@ def test_get_slide_content_no_slide_numbers(mocker):
     mocker.patch("server._get_retriever", return_value=mock_retriever)
     get_slide_content(deck_id="d1")
     mock_retriever.get_slide_content.assert_called_once_with("d1", None)
+
+
+def test_filter_decks_by_tags_delegates_to_retriever(mocker):
+    fake_results = [{"deck_id": "tech1", "title": "Tech Pitch", "tags": {}, "slide_count": 2, "source_path": "/Technology/tech1.pptx"}]
+    mock_retriever = MagicMock()
+    mock_retriever.filter_decks_by_tags.return_value = fake_results
+    mocker.patch("server._get_retriever", return_value=mock_retriever)
+    results = filter_decks_by_tags(industry="Technology", deck_type="Pitch", limit=5)
+    mock_retriever.filter_decks_by_tags.assert_called_once_with(
+        industry="Technology", sub_industry=None, product_line=None, deal_size=None,
+        client_name=None, date_from=None, date_to=None, deck_type="Pitch", limit=5,
+    )
+    assert results == fake_results
