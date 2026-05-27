@@ -172,6 +172,20 @@ def test_write_embeddings_meta_parquet_schema(writer):
     assert set(table.schema.names) >= {"deck_id", "slide_number", "source_path"}
 
 
+# --- write_latest_manifest: uploads to correct key ---
+def test_write_latest_manifest_uses_correct_key(writer):
+    writer.write_latest_manifest(run_ts="2026-05-27T10:00:00Z")
+    key = writer._s3.put_object.call_args.kwargs["Key"]
+    assert key == "snapshots/latest.json"
+    assert writer._s3.put_object.call_args.kwargs["Bucket"] == "test-bucket"
+
+
+# --- write_latest_manifest: returns s3 URI ---
+def test_write_latest_manifest_returns_uri(writer):
+    uri = writer.write_latest_manifest(run_ts="2026-05-27T10:00:00Z")
+    assert uri == "s3://test-bucket/snapshots/latest.json"
+
+
 # --- write_decks: multiple rows all written ---
 def test_write_decks_multiple_rows(writer):
     slide2 = SAMPLE_SLIDE.model_copy(update={"slide_number": 2, "title": "Slide Two"})

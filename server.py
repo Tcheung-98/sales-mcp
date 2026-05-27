@@ -8,6 +8,8 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import JSONResponse
 from starlette.routing import Route
 
+from ingestion.retriever import SlideRetriever
+
 _EXPECTED_TOKEN = os.environ.get("MCP_SHARED_SECRET")
 
 
@@ -28,16 +30,18 @@ mcp = FastMCP(
     transport_security=TransportSecuritySettings(enable_dns_rebinding_protection=False),
 )
 
-# Stub data so you have something to query
-DECKS = [
-    {"id": "deck1", "title": "Tech Q1 Pitch", "industry": "tech"},
-    {"id": "deck2", "title": "Healthcare Q2", "industry": "healthcare"},
-]
+_retriever: SlideRetriever | None = None
+
+def _get_retriever() -> SlideRetriever:
+    global _retriever
+    if _retriever is None:
+        _retriever = SlideRetriever()
+    return _retriever
 
 @mcp.tool()
-def search_historical_decks(industry: str) -> list[dict]:
-    """Find historical decks by industry."""
-    return [d for d in DECKS if d["industry"] == industry]
+def search_decks(query: str, k: int = 5) -> list[dict]:
+    """Search Fortune sales decks by semantic similarity. Returns the k most relevant slides."""
+    return _get_retriever().search(query, k=k)
 
 @mcp.tool()
 def hello(name: str) -> str:

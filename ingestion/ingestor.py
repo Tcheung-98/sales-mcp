@@ -51,6 +51,7 @@ def run_ingest(
     writer.write_failed(failed, run_ts=run_ts)
     vectors, meta = embedder.embed_slides(slides)
     writer.write_embeddings(vectors, meta, run_ts=run_ts)
+    writer.write_latest_manifest(run_ts=run_ts)
     logger.info("ingest complete — %d slides, %d failed decks", len(slides), len(failed))
 
     return slides, failed
