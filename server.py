@@ -7,6 +7,7 @@ from mcp.server.fastmcp.server import TransportSecuritySettings
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import JSONResponse
 from starlette.routing import Route
+
 from ingestion.retriever import SlideRetriever
 
 _EXPECTED_TOKEN = os.environ.get("MCP_SHARED_SECRET")

@@ -9,7 +9,6 @@ import pytest
 
 from ingestion.retriever import SlideRetriever
 
-
 RUN_TS = "2026-05-27T10:00:00Z"
 
 # Three orthogonal unit vectors — dot product with a query vec gives a clean,
@@ -86,7 +85,9 @@ def _embedder_mock(query_vec=None):
 def retriever(mocker, monkeypatch):
     monkeypatch.setenv("S3_SNAPSHOT_BUCKET", "test-bucket")
     mocker.patch("ingestion.retriever.boto3.client", return_value=_s3_mock())
-    return SlideRetriever(bucket="test-bucket", snapshot_prefix="snapshots", embedder=_embedder_mock())
+    return SlideRetriever(
+        bucket="test-bucket", snapshot_prefix="snapshots", embedder=_embedder_mock()
+    )
 
 
 # --- k=3 → exactly 3 results ---
@@ -100,7 +101,9 @@ def test_search_results_sorted_by_score(mocker, monkeypatch):
     q = np.zeros(1024, dtype=np.float32)
     q[0], q[1], q[2] = 0.9, 0.5, 0.1  # d1 > d2 > d3
     mocker.patch("ingestion.retriever.boto3.client", return_value=_s3_mock())
-    r = SlideRetriever(bucket="test-bucket", snapshot_prefix="snapshots", embedder=_embedder_mock(q))
+    r = SlideRetriever(
+        bucket="test-bucket", snapshot_prefix="snapshots", embedder=_embedder_mock(q)
+    )
     scores = [res["score"] for res in r.search("query", k=3)]
     assert scores == sorted(scores, reverse=True)
 
@@ -115,7 +118,8 @@ def test_search_result_fields(retriever):
 # --- zero vectors → empty list, embedder never called ---
 def test_search_empty_corpus_returns_empty(mocker, monkeypatch):
     monkeypatch.setenv("S3_SNAPSHOT_BUCKET", "test-bucket")
-    mocker.patch("ingestion.retriever.boto3.client", return_value=_s3_mock(vectors=np.empty((0, 1024), dtype=np.float32)))
+    empty = np.empty((0, 1024), dtype=np.float32)
+    mocker.patch("ingestion.retriever.boto3.client", return_value=_s3_mock(vectors=empty))
     embedder = _embedder_mock()
     r = SlideRetriever(bucket="test-bucket", snapshot_prefix="snapshots", embedder=embedder)
     assert r.search("anything") == []
