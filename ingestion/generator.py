@@ -7,6 +7,7 @@ import uuid
 import anthropic
 import boto3
 from pptx import Presentation
+from pptx.oxml.ns import qn
 
 logger = logging.getLogger(__name__)
 
@@ -15,21 +16,37 @@ _DEFAULT_MODEL = "claude-sonnet-4-6"
 _GENERATED_PREFIX = "generated"
 
 _SYSTEM_PROMPT = """\
-You are a sales deck writer for Fortune Media Group. Write like a senior AE, not a consultant.
+You are a senior AE at Fortune Media Group building a custom pitch deck.
 
 Return ONLY a JSON array — no prose, no markdown fences. Each element is one slide object:
 - Title slide (first): {"slide_type": "title", "title": "...", "subtitle": "..."}
 - Content slides:      {"slide_type": "content", "title": "...", "bullets": ["...", "..."]}
 
-Rules:
-- 6-10 slides maximum. Cut anything that doesn't directly serve the brief.
-- Bullets are fragments, not sentences. Start with a number or a noun, never a verb phrase.
-- 2-4 bullets per slide. If you need more, split the slide.
-- No filler: ban "leverage", "synergy", "best-in-class", "cutting-edge", "robust", "seamless"
-- No throat-clearing: no "overview", "introduction", or "in conclusion" slides
-- Be specific — pull real details from the reference slides. If you have no specific detail, \
-omit the point entirely rather than generalizing.
-- Every slide must earn its place. If you can't say what it adds, cut it.\
+You will receive: (1) a client brief, (2) Fortune's product & rate card, \
+(3) reference slides from past decks.
+
+How to use each input:
+- Brief: defines the client's vertical, audience, and goal — everything must serve THIS client
+- Rate card: your primary source for product names, pricing, cadence, and audience fit — \
+pick 3-6 products that genuinely match the brief's vertical and target audience, \
+cite real product names and real pricing figures
+- Reference slides: style and structure inspiration only — do not copy their generic content
+
+Deck structure (in order):
+1. Title slide — client-specific headline, not "Fortune Media Pitch"
+2. Why Fortune — 1 slide, specific reach numbers or editorial authority relevant to their sector
+3. Recommended products — 1-2 slides naming specific Fortune products from the rate card \
+with cadence and pricing
+4. Audience match — 1 slide showing Fortune's audience aligns with their target (use \
+Audience Alignment and Contextual Alignment from the rate card)
+5. Investment — 1 slide with actual pricing tiers from the rate card for the recommended mix
+6. Next steps — 1 slide, specific and actionable
+
+Writing rules:
+- Bullets are fragments. Start with a number, a product name, or a noun — never a verb phrase.
+- 2-4 bullets per slide maximum.
+- No filler words: ban "leverage", "synergy", "best-in-class", "cutting-edge", "seamless"
+- Every bullet must contain a specific fact, name, or number. Cut anything vague.\
 """
 
 
@@ -38,16 +55,19 @@ class DeckGenerator:
         self,
         bucket: str | None = None,
         seed_key: str | None = None,
+        rate_sheet_key: str | None = None,
         secret_name: str = _SECRET_NAME,
         model: str = _DEFAULT_MODEL,
     ) -> None:
         self._bucket = bucket or os.environ["S3_SNAPSHOT_BUCKET"]
         self._seed_key = seed_key or os.environ["PPTX_SEED_DECK_KEY"]
+        self._rate_sheet_key = rate_sheet_key or os.environ.get("RATE_SHEET_KEY")
         self._secret_name = secret_name
         self._model = model
         self._s3 = boto3.client("s3")
         self._seed_bytes: bytes | None = None
         self._api_key: str | None = None
+        self._rate_sheet: str | None = None
 
     def _load_seed(self) -> bytes:
         if self._seed_bytes is None:
@@ -55,6 +75,39 @@ class DeckGenerator:
             self._seed_bytes = resp["Body"].read()
             logger.info("loaded seed deck from s3://%s/%s", self._bucket, self._seed_key)
         return self._seed_bytes
+
+    def _load_rate_sheet(self) -> str | None:
+        if self._rate_sheet is None and self._rate_sheet_key:
+            resp = self._s3.get_object(Bucket=self._bucket, Key=self._rate_sheet_key)
+            products = json.loads(resp["Body"].read())
+            lines = []
+            for p in products:
+                parts = [p.get("Inventory", ""), p.get("Product Category", "")]
+                if p.get("Cadence"):
+                    parts.append(p["Cadence"])
+                if p.get("Vertical"):
+                    parts.append(f"Verticals: {p['Vertical']}")
+                if p.get("Audience Alignment"):
+                    parts.append(f"Audience: {p['Audience Alignment']}")
+                if p.get("Contextual Alignment"):
+                    parts.append(f"Context: {p['Contextual Alignment']}")
+                pricing = []
+                for label, key in [
+                    ("Daily", "Daily_Cost"), ("Weekly", "Weekly_Cost"),
+                    ("Monthly", "Monthly_Cost"), ("Quarterly", "Quarterly_Cost"),
+                    ("Annual", "Annual_Cost"), ("CPM", "CPM_Rate"),
+                    ("Min", "Product_Minimum"), ("Flat Fee", "Flat_Fee"),
+                ]:
+                    if p.get(key):
+                        pricing.append(f"{label}: ${p[key]}")
+                if pricing:
+                    parts.append(" | ".join(pricing))
+                if p.get("Notes"):
+                    parts.append(f"Notes: {p['Notes']}")
+                lines.append(" | ".join(filter(None, parts)))
+            self._rate_sheet = "\n".join(lines)
+            logger.info("loaded rate sheet: %d products", len(products))
+        return self._rate_sheet
 
     def _get_api_key(self) -> str:
         if self._api_key is None:
@@ -81,7 +134,18 @@ class DeckGenerator:
             for s in context_slides
         )
 
-        user_msg = f"Brief:\n{brief}\n\nReference slides from Fortune corpus:\n{context_text}"
+        rate_sheet = self._load_rate_sheet()
+        rate_section = (
+            f"\n\nFortune product & rate card (use for accurate product names and pricing):\n"
+            f"{rate_sheet}"
+            if rate_sheet else ""
+        )
+
+        user_msg = (
+            f"Brief:\n{brief}"
+            f"{rate_section}"
+            f"\n\nReference slides from Fortune corpus:\n{context_text}"
+        )
 
         client = anthropic.Anthropic(api_key=self._get_api_key())
         response = client.messages.create(
@@ -111,47 +175,67 @@ class DeckGenerator:
         seed = self._load_seed()
         prs = Presentation(io.BytesIO(seed))
 
-        # Remove all existing slides while preserving slide masters/layouts
-        xml_slides = prs.slides._sldIdLst
-        for sld in list(xml_slides):
-            xml_slides.remove(sld)
+        # Proper slide deletion: drop both the relationship AND the sldId element
+        for sld_id in list(prs.slides._sldIdLst):
+            rId = sld_id.get(qn("r:id"))
+            prs.part.drop_rel(rId)
+            prs.slides._sldIdLst.remove(sld_id)
 
         layout_map = {layout.name: layout for layout in prs.slide_layouts}
 
-        def _pick_layout(preferred: str, fallback_idx: int):
-            return layout_map.get(preferred) or prs.slide_layouts[fallback_idx]
+        def _pick_layout(*names: str):
+            for name in names:
+                if name in layout_map:
+                    return layout_map[name]
+            return prs.slide_layouts[2]
+
+        def _set_title(slide, text: str) -> None:
+            if slide.shapes.title:
+                slide.shapes.title.text = text
+
+        def _set_body(slide, bullets: list[str]) -> None:
+            # Clear ALL non-title placeholders first so labels like "INSERT EYEBROW" don't show
+            body_ph = None
+            for ph in slide.placeholders:
+                if ph.placeholder_format.idx == 0:
+                    continue
+                if ph.has_text_frame:
+                    ph.text_frame.clear()
+                    # Body placeholder (idx=1) gets the bullets; others stay blank
+                    if ph.placeholder_format.idx == 1:
+                        body_ph = ph
+            if body_ph is None:
+                # Fallback: use the first non-title text placeholder we can find
+                for ph in slide.placeholders:
+                    if ph.placeholder_format.idx != 0 and ph.has_text_frame:
+                        body_ph = ph
+                        break
+            if body_ph is None:
+                return
+            tf = body_ph.text_frame
+            for i, bullet in enumerate(bullets):
+                if i == 0:
+                    tf.paragraphs[0].text = bullet
+                else:
+                    p = tf.add_paragraph()
+                    p.text = bullet
 
         for slide_data in slides:
             slide_type = slide_data.get("slide_type", "content")
 
             if slide_type == "title":
-                layout = _pick_layout("Title Slide", 0)
+                layout = _pick_layout("Title Slide", "COVER blue option")
                 slide = prs.slides.add_slide(layout)
-                for ph in slide.placeholders:
-                    idx = ph.placeholder_format.idx
-                    if idx == 0:
-                        ph.text = slide_data.get("title", "")
-                    elif idx == 1:
-                        ph.text = slide_data.get("subtitle", "")
+                _set_title(slide, slide_data.get("title", ""))
+                _set_body(slide, [slide_data.get("subtitle", "")])
             else:
-                layout = _pick_layout("Title and Content", 1)
+                layout = _pick_layout(
+                    "TITLE+CONTENT_1-LINE", "1_TITLE+CONTENT_1-LINE",
+                    "2_Title and Content", "Title and Content",
+                )
                 slide = prs.slides.add_slide(layout)
-                for ph in slide.placeholders:
-                    idx = ph.placeholder_format.idx
-                    if idx == 0:
-                        ph.text = slide_data.get("title", "")
-                    elif idx == 1:
-                        tf = ph.text_frame
-                        tf.clear()
-                        bullets = slide_data.get("bullets", [])
-                        for i, bullet in enumerate(bullets):
-                            if i == 0:
-                                tf.paragraphs[0].text = bullet
-                                tf.paragraphs[0].level = 0
-                            else:
-                                p = tf.add_paragraph()
-                                p.text = bullet
-                                p.level = 0
+                _set_title(slide, slide_data.get("title", ""))
+                _set_body(slide, slide_data.get("bullets", []))
 
         buf = io.BytesIO()
         prs.save(buf)
