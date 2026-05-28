@@ -8,6 +8,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import JSONResponse
 from starlette.routing import Route
 
+from ingestion.generator import DeckGenerator
 from ingestion.retriever import SlideRetriever
 
 _EXPECTED_TOKEN = os.environ.get("MCP_SHARED_SECRET")
@@ -31,12 +32,21 @@ mcp = FastMCP(
 )
 
 _retriever: SlideRetriever | None = None
+_generator: DeckGenerator | None = None
+
 
 def _get_retriever() -> SlideRetriever:
     global _retriever
     if _retriever is None:
         _retriever = SlideRetriever()
     return _retriever
+
+
+def _get_generator() -> DeckGenerator:
+    global _generator
+    if _generator is None:
+        _generator = DeckGenerator()
+    return _generator
 
 @mcp.tool()
 def search_decks(query: str, k: int = 5) -> list[dict]:
@@ -86,6 +96,19 @@ def get_slide_content(deck_id: str, slide_numbers: list[int] | None = None) -> l
     requested slide numbers don't exist — never raises an error.
     """
     return _get_retriever().get_slide_content(deck_id, slide_numbers)
+
+@mcp.tool()
+def generate_deck(brief: str, k: int = 10) -> dict:
+    """
+    Generate a Fortune-branded PowerPoint deck from a plain-text brief. Retrieves the
+    k most relevant slides from the corpus as grounding context, then calls Claude to
+    author the slide content following Fortune's style. Returns a presigned S3 download
+    URL (valid 24 hours), the S3 URI, slide count, and the original brief.
+    Use this when an account executive provides a brief and wants a ready-to-use deck.
+    """
+    context_slides = _get_retriever().search(brief, k=k)
+    return _get_generator().generate(brief, context_slides)
+
 
 @mcp.tool()
 def hello(name: str) -> str:
