@@ -16,6 +16,7 @@ dependencies = [
     "requests>=2.31",
     "pyarrow>=16",
     "numpy>=2.2.6",
+    "anthropic>=0.104.1",
 ]
 
 [dependency-groups]
