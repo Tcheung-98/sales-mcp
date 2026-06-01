@@ -21,9 +21,21 @@ _GENERATED_PREFIX = "generated"
 _SYSTEM_PROMPT = """\
 You are a senior AE at Fortune Media Group writing a custom pitch deck for a specific client.
 
-Return ONLY a JSON array — no prose, no markdown fences. Each element is one slide object:
-- Title slide (first): {"slide_type": "title", "title": "...", "subtitle": "..."}
-- Content slides:      {"slide_type": "content", "title": "...", "bullets": ["...", "..."]}
+Return ONLY a JSON array — no prose, no markdown fences. Each element is one slide object
+with a "slide_type" field. Use exactly these types and fields:
+
+  {"slide_type": "title",       "title": "...", "subtitle": "..."}
+  {"slide_type": "why_fortune", "title": "...", "body": "..."}
+  {"slide_type": "product",     "title": "...", "eyebrow": "...", "bullets": ["..."]}
+  {"slide_type": "proof",       "title": "...", "eyebrow": "...", "bullets": ["..."]}
+  {"slide_type": "investment",  "title": "...", "eyebrow": "...", "bullets": ["..."]}
+  {"slide_type": "next_steps",  "title": "...", "eyebrow": "...", "bullets": ["..."]}
+
+Field rules:
+- "eyebrow": short ALL-CAPS label above the title (e.g. "RECOMMENDED PRODUCTS", \
+"PERFORMANCE DATA", "INVESTMENT", "NEXT STEPS"). Omit only if nothing fits.
+- "body" (why_fortune only): 1-3 sentences of descriptive prose. Not bullets, not fragments.
+- "bullets": em-dash items. Max 18 words each. Max 3 per slide. Fragments only.
 
 You will receive: (1) a client brief, (2) Fortune's product & rate card, \
 (3) reference slides from past Fortune decks.
@@ -46,15 +58,17 @@ Writing rules — write like a pitch, not a spec sheet:
 "robust", "drive engagement"
 - Pricing appears only on the investment slide, never elsewhere
 
-Deck structure (in order):
-1. Title — client-specific headline that names their goal, not "Fortune Media Pitch"
-2. Why Fortune — Fortune's authority and reach framed around THIS client's sector and goal
-3. Recommended products — 1-2 slides, each product described by what it does and \
-who it reaches, tied back to the client's target audience
-4. Proof — performance stats or audience data from the reference slides that validate \
-the recommendation (skip this slide if no relevant data exists)
-5. Investment — clean pricing tiers using real figures from the rate card
-6. Next steps — 3 concrete actions with implied timeline\
+Deck structure (slide_type, in order):
+1. title — client-specific headline naming their goal, never "Fortune Media Pitch"
+2. why_fortune — Fortune's authority and reach framed around THIS client's sector and goal; \
+body is 1-3 sentences of prose
+3. product × 1-2 — each product by what it does and who it reaches, tied to the client's \
+target audience; eyebrow "RECOMMENDED PRODUCTS"
+4. proof — performance stats or audience data from reference slides; eyebrow "PERFORMANCE \
+DATA"; omit this slide entirely if no relevant data exists in the reference slides
+5. investment — clean pricing tiers using real figures from the rate card; eyebrow \
+"INVESTMENT"; pricing appears ONLY here
+6. next_steps — 3 concrete actions with implied timeline; eyebrow "NEXT STEPS"\
 """
 
 
@@ -154,11 +168,10 @@ class DeckGenerator:
                 bu_char.set("char", "—")
 
     @staticmethod
-    def _prune_placeholders(slide) -> None:
-        # Keep title (0) and content body (1); remove picture, eyebrow, source, etc.
+    def _prune_placeholders(slide, keep: frozenset = frozenset({0, 1})) -> None:
         sp_tree = slide.shapes._spTree
         for ph in list(slide.placeholders):
-            if ph.placeholder_format.idx not in (0, 1):
+            if ph.placeholder_format.idx not in keep:
                 sp_tree.remove(ph._element)
 
     @staticmethod
@@ -182,13 +195,46 @@ class DeckGenerator:
                 ph.text_frame.paragraphs[0].text = slide_data.get("subtitle", "")
                 break
 
+    @staticmethod
+    def _populate_why_fortune_slide(slide, slide_data: dict) -> None:
+        # 7_Title Only: idx 17 = eyebrow (0.35in), idx 0 = title (0.84in), idx 1 = body (1.29in)
+        if slide.shapes.title:
+            slide.shapes.title.text = slide_data.get("title", "")
+        ph_map = {ph.placeholder_format.idx: ph for ph in slide.placeholders if ph.has_text_frame}
+        body_ph = ph_map.get(1)
+        if body_ph:
+            body_ph.text_frame.clear()
+            body_ph.text_frame.paragraphs[0].text = slide_data.get("body", "")
+        slide.background.fill.solid()
+        slide.background.fill.fore_color.rgb = RGBColor(0x10, 0x18, 0x5F)
+        white = RGBColor(0xFF, 0xFF, 0xFF)
+        for ph in slide.placeholders:
+            if ph.has_text_frame:
+                for para in ph.text_frame.paragraphs:
+                    para.font.color.rgb = white
+                    for run in para.runs:
+                        run.font.color.rgb = white
+        DeckGenerator._prune_placeholders(slide, frozenset({0, 1}))
+
     def _populate_content_slide(self, slide, slide_data: dict) -> None:
         self._set_title(slide, slide_data.get("title", ""))
         self._set_body(slide, slide_data.get("bullets", []))
+        eyebrow = slide_data.get("eyebrow")
+        if eyebrow:
+            ph_map = {
+                ph.placeholder_format.idx: ph
+                for ph in slide.placeholders
+                if ph.has_text_frame
+            }
+            eyebrow_ph = ph_map.get(20)
+            if eyebrow_ph:
+                eyebrow_ph.text_frame.clear()
+                eyebrow_ph.text_frame.paragraphs[0].text = eyebrow
         self._apply_brand_bg(slide)
         self._set_text_white(slide)
         self._add_bullets(slide)
-        self._prune_placeholders(slide)
+        keep = frozenset({0, 1, 20}) if eyebrow else frozenset({0, 1})
+        self._prune_placeholders(slide, keep)
 
     def _load_seed(self) -> bytes:
         if self._seed_bytes is None:
@@ -307,14 +353,20 @@ class DeckGenerator:
         self._clear_seed_slides(prs)
 
         for slide_data in slides:
-            slide_type = slide_data.get("slide_type", "content")
+            slide_type = slide_data.get("slide_type", "product")
             if slide_type == "title":
                 layout = self._pick_layout(prs, layout_map, "COVER blue option", "Title Slide")
                 slide = prs.slides.add_slide(layout)
                 self._populate_title_slide(slide, slide_data)
+            elif slide_type == "why_fortune":
+                layout = self._pick_layout(prs, layout_map, "7_Title Only", "Title Only")
+                slide = prs.slides.add_slide(layout)
+                self._populate_why_fortune_slide(slide, slide_data)
             else:
+                # product, proof, investment, next_steps
                 layout = self._pick_layout(
-                    prs, layout_map, "2_Title and Content", "Title and Content"
+                    prs, layout_map,
+                    "8_Title and Content", "2_Title and Content", "Title and Content",
                 )
                 slide = prs.slides.add_slide(layout)
                 self._populate_content_slide(slide, slide_data)
