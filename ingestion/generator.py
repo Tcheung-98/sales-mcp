@@ -221,7 +221,11 @@ class DeckGenerator:
         self._set_body(slide, slide_data.get("bullets", []))
         eyebrow = slide_data.get("eyebrow")
         if eyebrow:
-            ph_map = {ph.placeholder_format.idx: ph for ph in slide.placeholders if ph.has_text_frame}
+            ph_map = {
+                ph.placeholder_format.idx: ph
+                for ph in slide.placeholders
+                if ph.has_text_frame
+            }
             eyebrow_ph = ph_map.get(20)
             if eyebrow_ph:
                 eyebrow_ph.text_frame.clear()
@@ -361,7 +365,8 @@ class DeckGenerator:
             else:
                 # product, proof, investment, next_steps
                 layout = self._pick_layout(
-                    prs, layout_map, "8_Title and Content", "2_Title and Content", "Title and Content"
+                    prs, layout_map,
+                    "8_Title and Content", "2_Title and Content", "Title and Content",
                 )
                 slide = prs.slides.add_slide(layout)
                 self._populate_content_slide(slide, slide_data)
