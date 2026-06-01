@@ -10,6 +10,7 @@ from lxml import etree
 from pptx import Presentation
 from pptx.dml.color import RGBColor
 from pptx.oxml.ns import qn
+from pptx.presentation import Presentation as PresentationType
 
 logger = logging.getLogger(__name__)
 
@@ -77,7 +78,7 @@ class DeckGenerator:
         self._rate_sheet: str | None = None
 
     @staticmethod
-    def _clear_seed_slides(prs: Presentation) -> None:
+    def _clear_seed_slides(prs: PresentationType) -> None:
         # Proper deletion: drop relationship AND sldId element.
         for sld_id in list(prs.slides._sldIdLst):
             r_id = sld_id.get(qn("r:id"))
@@ -85,7 +86,7 @@ class DeckGenerator:
             prs.slides._sldIdLst.remove(sld_id)
 
     @staticmethod
-    def _pick_layout(prs: Presentation, layout_map: dict, *names: str):
+    def _pick_layout(prs: PresentationType, layout_map: dict, *names: str):
         for name in names:
             if name in layout_map:
                 return layout_map[name]
@@ -284,7 +285,10 @@ class DeckGenerator:
             output_tokens,
             cost_usd,
         )
-        raw = response.content[0].text.strip()
+        block = response.content[0]
+        if not isinstance(block, anthropic.types.TextBlock):
+            raise ValueError(f"Unexpected response block type: {type(block)}")
+        raw = block.text.strip()
         # Strip markdown fences if Claude ignored the prompt instruction
         if raw.startswith("```"):
             raw = raw.split("\n", 1)[-1]
