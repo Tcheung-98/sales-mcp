@@ -3,11 +3,12 @@ import json
 import logging
 import os
 import uuid
+
 import anthropic
 import boto3
+from lxml import etree
 from pptx import Presentation
 from pptx.dml.color import RGBColor
-from lxml import etree
 from pptx.oxml.ns import qn
 
 logger = logging.getLogger(__name__)
@@ -308,7 +309,9 @@ class DeckGenerator:
                 slide = prs.slides.add_slide(layout)
                 self._populate_title_slide(slide, slide_data)
             else:
-                layout = self._pick_layout(prs, layout_map, "2_Title and Content", "Title and Content")
+                layout = self._pick_layout(
+                    prs, layout_map, "2_Title and Content", "Title and Content"
+                )
                 slide = prs.slides.add_slide(layout)
                 self._populate_content_slide(slide, slide_data)
 
