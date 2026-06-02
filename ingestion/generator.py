@@ -9,6 +9,8 @@ import boto3
 from lxml import etree
 from pptx import Presentation
 from pptx.dml.color import RGBColor
+from pptx.opc.constants import RELATIONSHIP_TYPE as RT
+from pptx.oxml import parse_xml
 from pptx.oxml.ns import qn
 from pptx.presentation import Presentation as PresentationType
 
@@ -25,7 +27,6 @@ Return ONLY a JSON array — no prose, no markdown fences. Each element is one s
 with a "slide_type" field. Use exactly these types and fields:
 
   {"slide_type": "title",       "title": "...", "subtitle": "..."}
-  {"slide_type": "why_fortune", "title": "...", "body": "..."}
   {"slide_type": "product",     "title": "...", "eyebrow": "...", "bullets": ["..."]}
   {"slide_type": "proof",       "title": "...", "eyebrow": "...", "bullets": ["..."]}
   {"slide_type": "investment",  "title": "...", "eyebrow": "...", "bullets": ["..."]}
@@ -34,8 +35,7 @@ with a "slide_type" field. Use exactly these types and fields:
 Field rules:
 - "eyebrow": short ALL-CAPS label above the title (e.g. "RECOMMENDED PRODUCTS", \
 "PERFORMANCE DATA", "INVESTMENT", "NEXT STEPS"). Omit only if nothing fits.
-- "body" (why_fortune only): 1-3 sentences of descriptive prose. Not bullets, not fragments.
-- "bullets": em-dash items. Max 18 words each. Max 3 per slide. Fragments only.
+- "bullets": plain bullet fragments. Max 18 words each. Max 3 per slide.
 
 You will receive: (1) a client brief, (2) Fortune's product & rate card, \
 (3) reference slides from past Fortune decks.
@@ -60,15 +60,13 @@ Writing rules — write like a pitch, not a spec sheet:
 
 Deck structure (slide_type, in order):
 1. title — client-specific headline naming their goal, never "Fortune Media Pitch"
-2. why_fortune — Fortune's authority and reach framed around THIS client's sector and goal; \
-body is 1-3 sentences of prose
-3. product × 1-2 — each product by what it does and who it reaches, tied to the client's \
+2. product × 1-2 — each product by what it does and who it reaches, tied to the client's \
 target audience; eyebrow "RECOMMENDED PRODUCTS"
-4. proof — performance stats or audience data from reference slides; eyebrow "PERFORMANCE \
+3. proof — performance stats or audience data from reference slides; eyebrow "PERFORMANCE \
 DATA"; omit this slide entirely if no relevant data exists in the reference slides
-5. investment — clean pricing tiers using real figures from the rate card; eyebrow \
+4. investment — clean pricing tiers using real figures from the rate card; eyebrow \
 "INVESTMENT"; pricing appears ONLY here
-6. next_steps — 3 concrete actions with implied timeline; eyebrow "NEXT STEPS"\
+5. next_steps — 3 concrete actions with implied timeline; eyebrow "NEXT STEPS"\
 """
 
 
@@ -76,18 +74,20 @@ class DeckGenerator:
     def __init__(
         self,
         bucket: str | None = None,
-        seed_key: str | None = None,
+        blank_key: str | None = None,
         rate_sheet_key: str | None = None,
         secret_name: str = _SECRET_NAME,
         model: str = _DEFAULT_MODEL,
     ) -> None:
         self._bucket = bucket or os.environ["S3_SNAPSHOT_BUCKET"]
-        self._seed_key = seed_key or os.environ["PPTX_SEED_DECK_KEY"]
+        self._blank_key = blank_key or os.environ.get(
+            "PPTX_BLANK_DECK_KEY", "templates/blank.pptx"
+        )
         self._rate_sheet_key = rate_sheet_key or os.environ.get("RATE_SHEET_KEY")
         self._secret_name = secret_name
         self._model = model
         self._s3 = boto3.client("s3")
-        self._seed_bytes: bytes | None = None
+        self._blank_bytes: bytes | None = None
         self._api_key: str | None = None
         self._rate_sheet: str | None = None
 
@@ -98,13 +98,6 @@ class DeckGenerator:
             r_id = sld_id.get(qn("r:id"))
             prs.part.drop_rel(r_id)
             prs.slides._sldIdLst.remove(sld_id)
-
-    @staticmethod
-    def _pick_layout(prs: PresentationType, layout_map: dict, *names: str):
-        for name in names:
-            if name in layout_map:
-                return layout_map[name]
-        return prs.slide_layouts[2]
 
     @staticmethod
     def _set_title(slide, text: str) -> None:
@@ -136,43 +129,63 @@ class DeckGenerator:
                 tf.add_paragraph().text = bullet
 
     @staticmethod
-    def _apply_brand_bg(slide) -> None:
-        slide.background.fill.solid()
-        slide.background.fill.fore_color.rgb = RGBColor(0x10, 0x18, 0x5F)
-
-    @staticmethod
-    def _set_text_white(slide) -> None:
-        white = RGBColor(0xFF, 0xFF, 0xFF)
-        for ph in slide.placeholders:
-            if not ph.has_text_frame:
-                continue
-            for para in ph.text_frame.paragraphs:
-                para.font.color.rgb = white
-                for run in para.runs:
-                    run.font.color.rgb = white
-
-    @staticmethod
-    def _add_bullets(slide) -> None:
-        for ph in slide.placeholders:
-            if ph.placeholder_format.idx != 1 or not ph.has_text_frame:
-                continue
-            for para in ph.text_frame.paragraphs:
-                if not para.text.strip():
-                    continue
-                p_pr = para._p.get_or_add_pPr()
-                for tag in (qn("a:buNone"), qn("a:buChar"), qn("a:buAutoNum")):
-                    existing = p_pr.find(tag)
-                    if existing is not None:
-                        p_pr.remove(existing)
-                bu_char = etree.SubElement(p_pr, qn("a:buChar"))
-                bu_char.set("char", "—")
-
-    @staticmethod
     def _prune_placeholders(slide, keep: frozenset = frozenset({0, 1})) -> None:
-        sp_tree = slide.shapes._spTree
         for ph in list(slide.placeholders):
             if ph.placeholder_format.idx not in keep:
-                sp_tree.remove(ph._element)
+                parent = ph._element.getparent()
+                if parent is not None:
+                    parent.remove(ph._element)
+
+    @staticmethod
+    def _clone_slide(
+        source_prs: PresentationType, slide_idx: int, target_prs: PresentationType
+    ):
+        source_slide = source_prs.slides[slide_idx]
+
+        # Add a placeholder slide — gives us a proper slide part + sldIdLst entry
+        new_slide = target_prs.slides.add_slide(target_prs.slide_layouts[0])
+
+        # Register slide-level image parts from source into target; build rId map
+        rId_map: dict[str, str] = {}
+        for rId, rel in source_slide.part.rels.items():
+            if "image" in rel.reltype:
+                image_part = source_slide.part.related_part(rId)
+                new_rId = new_slide.part.relate_to(image_part, rel.reltype)
+                rId_map[rId] = new_rId
+
+        # Serialize source cSld, rewire rIds, re-parse with pptx element classes
+        # (parse_xml, not etree.fromstring, so spTree and other pptx attrs are available)
+        cSld_xml = etree.tostring(source_slide._element.cSld)
+        for old_rId, new_rId in rId_map.items():
+            cSld_xml = cSld_xml.replace(
+                f'r:embed="{old_rId}"'.encode(), f'r:embed="{new_rId}"'.encode()
+            )
+            cSld_xml = cSld_xml.replace(
+                f'r:link="{old_rId}"'.encode(), f'r:link="{new_rId}"'.encode()
+            )
+        fixed_cSld = parse_xml(cSld_xml)
+
+        # Swap target slide's cSld with the fixed clone
+        tgt_sld = new_slide._element
+        tgt_sld.replace(tgt_sld.cSld, fixed_cSld)
+
+        # shapes is a lazyproperty cached during add_slide; invalidate so next access
+        # gets a fresh SlideShapes pointing at the new spTree, not the discarded one
+        new_slide.__dict__.pop("shapes", None)
+
+        # Rewire layout relationship to match source slide's actual layout
+        src_layout_name = source_slide.slide_layout.name
+        target_layout = next(
+            (lay for lay in target_prs.slide_layouts if lay.name == src_layout_name),
+            target_prs.slide_layouts[0],
+        )
+        for rId, rel in list(new_slide.part.rels.items()):
+            if rel.reltype == RT.SLIDE_LAYOUT:
+                new_slide.part.drop_rel(rId)
+                break
+        new_slide.part.relate_to(target_layout.part, RT.SLIDE_LAYOUT)
+
+        return new_slide
 
     @staticmethod
     def _populate_title_slide(slide, slide_data: dict) -> None:
@@ -195,27 +208,6 @@ class DeckGenerator:
                 ph.text_frame.paragraphs[0].text = slide_data.get("subtitle", "")
                 break
 
-    @staticmethod
-    def _populate_why_fortune_slide(slide, slide_data: dict) -> None:
-        # 7_Title Only: idx 17 = eyebrow (0.35in), idx 0 = title (0.84in), idx 1 = body (1.29in)
-        if slide.shapes.title:
-            slide.shapes.title.text = slide_data.get("title", "")
-        ph_map = {ph.placeholder_format.idx: ph for ph in slide.placeholders if ph.has_text_frame}
-        body_ph = ph_map.get(1)
-        if body_ph:
-            body_ph.text_frame.clear()
-            body_ph.text_frame.paragraphs[0].text = slide_data.get("body", "")
-        slide.background.fill.solid()
-        slide.background.fill.fore_color.rgb = RGBColor(0x10, 0x18, 0x5F)
-        white = RGBColor(0xFF, 0xFF, 0xFF)
-        for ph in slide.placeholders:
-            if ph.has_text_frame:
-                for para in ph.text_frame.paragraphs:
-                    para.font.color.rgb = white
-                    for run in para.runs:
-                        run.font.color.rgb = white
-        DeckGenerator._prune_placeholders(slide, frozenset({0, 1}))
-
     def _populate_content_slide(self, slide, slide_data: dict) -> None:
         self._set_title(slide, slide_data.get("title", ""))
         self._set_body(slide, slide_data.get("bullets", []))
@@ -230,18 +222,15 @@ class DeckGenerator:
             if eyebrow_ph:
                 eyebrow_ph.text_frame.clear()
                 eyebrow_ph.text_frame.paragraphs[0].text = eyebrow
-        self._apply_brand_bg(slide)
-        self._set_text_white(slide)
-        self._add_bullets(slide)
         keep = frozenset({0, 1, 20}) if eyebrow else frozenset({0, 1})
         self._prune_placeholders(slide, keep)
 
-    def _load_seed(self) -> bytes:
-        if self._seed_bytes is None:
-            resp = self._s3.get_object(Bucket=self._bucket, Key=self._seed_key)
-            self._seed_bytes = resp["Body"].read()
-            logger.info("loaded seed deck from s3://%s/%s", self._bucket, self._seed_key)
-        return self._seed_bytes
+    def _load_blank(self) -> bytes:
+        if self._blank_bytes is None:
+            resp = self._s3.get_object(Bucket=self._bucket, Key=self._blank_key)
+            self._blank_bytes = resp["Body"].read()
+            logger.info("loaded blank template from s3://%s/%s", self._bucket, self._blank_key)
+        return self._blank_bytes
 
     def _load_rate_sheet(self) -> str | None:
         if self._rate_sheet is None and self._rate_sheet_key:
@@ -346,33 +335,28 @@ class DeckGenerator:
         return slides
 
     def _build_pptx(self, slides: list[dict]) -> bytes:
-        seed = self._load_seed()
-        prs = Presentation(io.BytesIO(seed))
+        blank = self._load_blank()
+        source_prs = Presentation(io.BytesIO(blank))   # read-only clone source
+        output_prs = Presentation(io.BytesIO(blank))   # output (inherits Fortune master/theme)
+        self._clear_seed_slides(output_prs)
 
-        layout_map = {layout.name: layout for layout in prs.slide_layouts}
-        self._clear_seed_slides(prs)
+        layout_map = {lay.name: lay for lay in output_prs.slide_layouts}
+        content_layout = layout_map.get("8_Title and Content", output_prs.slide_layouts[2])
 
         for slide_data in slides:
             slide_type = slide_data.get("slide_type", "product")
             if slide_type == "title":
-                layout = self._pick_layout(prs, layout_map, "COVER blue option", "Title Slide")
-                slide = prs.slides.add_slide(layout)
+                slide = self._clone_slide(source_prs, 0, output_prs)
                 self._populate_title_slide(slide, slide_data)
-            elif slide_type == "why_fortune":
-                layout = self._pick_layout(prs, layout_map, "7_Title Only", "Title Only")
-                slide = prs.slides.add_slide(layout)
-                self._populate_why_fortune_slide(slide, slide_data)
             else:
                 # product, proof, investment, next_steps
-                layout = self._pick_layout(
-                    prs, layout_map,
-                    "8_Title and Content", "2_Title and Content", "Title and Content",
-                )
-                slide = prs.slides.add_slide(layout)
+                slide = output_prs.slides.add_slide(content_layout)
+                slide.background.fill.solid()
+                slide.background.fill.fore_color.rgb = RGBColor(0x10, 0x18, 0x5F)
                 self._populate_content_slide(slide, slide_data)
 
         buf = io.BytesIO()
-        prs.save(buf)
+        output_prs.save(buf)
         return buf.getvalue()
 
     def _upload(self, pptx_bytes: bytes) -> dict:
