@@ -8,7 +8,6 @@ import anthropic
 import boto3
 from lxml import etree
 from pptx import Presentation
-from pptx.dml.color import RGBColor
 from pptx.opc.constants import RELATIONSHIP_TYPE as RT
 from pptx.oxml import parse_xml
 from pptx.oxml.ns import qn
@@ -88,6 +87,7 @@ class DeckGenerator:
         self._model = model
         self._s3 = boto3.client("s3")
         self._blank_bytes: bytes | None = None
+        self._pptx_cache: dict[str, Presentation] = {}
         self._api_key: str | None = None
         self._rate_sheet: str | None = None
 
@@ -98,43 +98,6 @@ class DeckGenerator:
             r_id = sld_id.get(qn("r:id"))
             prs.part.drop_rel(r_id)
             prs.slides._sldIdLst.remove(sld_id)
-
-    @staticmethod
-    def _set_title(slide, text: str) -> None:
-        if slide.shapes.title:
-            slide.shapes.title.text = text
-
-    @staticmethod
-    def _set_body(slide, bullets: list[str]) -> None:
-        # Clear all non-title text frames.
-        for ph in slide.placeholders:
-            if ph.placeholder_format.idx != 0 and ph.has_text_frame:
-                ph.text_frame.clear()
-        # idx 1 is the content body in all Fortune "Title and Content" layouts.
-        ph_map = {
-            ph.placeholder_format.idx: ph
-            for ph in slide.placeholders
-            if ph.has_text_frame
-        }
-        body_ph = ph_map.get(1) or next(
-            (ph for idx, ph in ph_map.items() if idx != 0), None
-        )
-        if body_ph is None:
-            return
-        tf = body_ph.text_frame
-        for i, bullet in enumerate(bullets):
-            if i == 0:
-                tf.paragraphs[0].text = bullet
-            else:
-                tf.add_paragraph().text = bullet
-
-    @staticmethod
-    def _prune_placeholders(slide, keep: frozenset = frozenset({0, 1})) -> None:
-        for ph in list(slide.placeholders):
-            if ph.placeholder_format.idx not in keep:
-                parent = ph._element.getparent()
-                if parent is not None:
-                    parent.remove(ph._element)
 
     @staticmethod
     def _clone_slide(
@@ -208,22 +171,12 @@ class DeckGenerator:
                 ph.text_frame.paragraphs[0].text = slide_data.get("subtitle", "")
                 break
 
-    def _populate_content_slide(self, slide, slide_data: dict) -> None:
-        self._set_title(slide, slide_data.get("title", ""))
-        self._set_body(slide, slide_data.get("bullets", []))
-        eyebrow = slide_data.get("eyebrow")
-        if eyebrow:
-            ph_map = {
-                ph.placeholder_format.idx: ph
-                for ph in slide.placeholders
-                if ph.has_text_frame
-            }
-            eyebrow_ph = ph_map.get(20)
-            if eyebrow_ph:
-                eyebrow_ph.text_frame.clear()
-                eyebrow_ph.text_frame.paragraphs[0].text = eyebrow
-        keep = frozenset({0, 1, 20}) if eyebrow else frozenset({0, 1})
-        self._prune_placeholders(slide, keep)
+    def _load_pptx(self, s3_key: str) -> Presentation:
+        if s3_key not in self._pptx_cache:
+            resp = self._s3.get_object(Bucket=self._bucket, Key=s3_key)
+            self._pptx_cache[s3_key] = Presentation(io.BytesIO(resp["Body"].read()))
+            logger.info("loaded pptx from s3://%s/%s", self._bucket, s3_key)
+        return self._pptx_cache[s3_key]
 
     def _load_blank(self) -> bytes:
         if self._blank_bytes is None:
@@ -334,26 +287,27 @@ class DeckGenerator:
             raise ValueError(f"Claude returned non-list JSON: {type(slides)}")
         return slides
 
+    @staticmethod
+    def _apply_replacements(slide, replacements: dict) -> None:
+        pass  # implemented in step 4
+
     def _build_pptx(self, slides: list[dict]) -> bytes:
         blank = self._load_blank()
-        source_prs = Presentation(io.BytesIO(blank))   # read-only clone source
-        output_prs = Presentation(io.BytesIO(blank))   # output (inherits Fortune master/theme)
+        blank_prs = Presentation(io.BytesIO(blank))   # cover slide source
+        output_prs = Presentation(io.BytesIO(blank))  # output (inherits Fortune master/theme)
         self._clear_seed_slides(output_prs)
 
-        layout_map = {lay.name: lay for lay in output_prs.slide_layouts}
-        content_layout = layout_map.get("8_Title and Content", output_prs.slide_layouts[2])
-
         for slide_data in slides:
-            slide_type = slide_data.get("slide_type", "product")
-            if slide_type == "title":
-                slide = self._clone_slide(source_prs, 0, output_prs)
+            action = slide_data.get("action", "clone")
+            if action == "cover":
+                slide = self._clone_slide(blank_prs, 0, output_prs)
                 self._populate_title_slide(slide, slide_data)
+            elif action == "clone":
+                source_prs = self._load_pptx(slide_data["source_path"])
+                slide = self._clone_slide(source_prs, slide_data["slide_number"] - 1, output_prs)
+                self._apply_replacements(slide, slide_data.get("replacements", {}))
             else:
-                # product, proof, investment, next_steps
-                slide = output_prs.slides.add_slide(content_layout)
-                slide.background.fill.solid()
-                slide.background.fill.fore_color.rgb = RGBColor(0x10, 0x18, 0x5F)
-                self._populate_content_slide(slide, slide_data)
+                raise ValueError(f"Unknown slide action: {action!r}")
 
         buf = io.BytesIO()
         output_prs.save(buf)

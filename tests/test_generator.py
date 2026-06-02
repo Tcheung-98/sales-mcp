@@ -24,20 +24,42 @@ def _build_generator() -> DeckGenerator:
     return generator
 
 
+def test_load_pptx_caches_by_key():
+    generator = _build_generator()
+    generator._s3.get_object.return_value = {"Body": io.BytesIO(_blank_bytes())}
+
+    prs_a1 = generator._load_pptx("corpus/deck_a.pptx")
+    prs_a2 = generator._load_pptx("corpus/deck_a.pptx")
+
+    assert prs_a1 is prs_a2
+    generator._s3.get_object.assert_called_once()
+
+
+def _clone_slide_data(source_path: str, slide_number: int = 1, **replacements) -> dict:
+    return {
+        "action": "clone",
+        "source_path": source_path,
+        "slide_number": slide_number,
+        "replacements": replacements,
+    }
+
+
 def test_build_pptx_correct_slide_count():
     generator = _build_generator()
-    slides = [
-        {"slide_type": "title", "title": "Client Growth Plan", "subtitle": "Q3 2026"},
-        {"slide_type": "product", "title": "Fortune.com", "bullets": ["Reaches 18M uniques"]},
-    ]
-    pptx_bytes = generator._build_pptx(slides)
+    source_prs = Presentation(io.BytesIO(_blank_bytes()))
+    with patch.object(generator, "_load_pptx", return_value=source_prs):
+        slides = [
+            {"action": "cover", "title": "Client Growth Plan", "subtitle": "Q3 2026"},
+            _clone_slide_data("corpus/deck.pptx"),
+        ]
+        pptx_bytes = generator._build_pptx(slides)
     prs = Presentation(io.BytesIO(pptx_bytes))
     assert len(prs.slides) == 2
 
 
 def test_build_pptx_title_slide_sets_headline():
     generator = _build_generator()
-    slides = [{"slide_type": "title", "title": "Client Growth Plan", "subtitle": "Q3 2026"}]
+    slides = [{"action": "cover", "title": "Client Growth Plan", "subtitle": "Q3 2026"}]
     pptx_bytes = generator._build_pptx(slides)
     prs = Presentation(io.BytesIO(pptx_bytes))
     slide = prs.slides[0]
@@ -50,38 +72,30 @@ def test_build_pptx_title_slide_sets_headline():
     assert "Q3 2026" in all_text.values()
 
 
-def test_build_pptx_content_slide_populates_title_and_bullets():
+def test_build_pptx_clone_action_calls_load_pptx():
     generator = _build_generator()
-    bullets = [
-        "Finance decision-makers at scale",
-        "Contextual programs around C-suite leadership",
-        "Measured outcomes in premium business environments",
-    ]
-    slides = [{"slide_type": "product", "title": "Recommended Products", "bullets": bullets}]
-    pptx_bytes = generator._build_pptx(slides)
-    prs = Presentation(io.BytesIO(pptx_bytes))
-    slide = prs.slides[0]
-
-    assert slide.shapes.title.text == "Recommended Products"
-
-    body = next(
-        ph for ph in slide.placeholders
-        if ph.has_text_frame and ph.placeholder_format.idx == 1
-    )
-    body_text = [p.text for p in body.text_frame.paragraphs if p.text.strip()]
-    assert body_text == bullets
+    source_prs = Presentation(io.BytesIO(_blank_bytes()))
+    with patch.object(generator, "_load_pptx", return_value=source_prs) as mock_load:
+        slides = [
+            {"action": "cover", "title": "T", "subtitle": "S"},
+            _clone_slide_data("corpus/product.pptx", slide_number=1),
+        ]
+        pptx_bytes = generator._build_pptx(slides)
+    mock_load.assert_called_once_with("corpus/product.pptx")
+    assert len(Presentation(io.BytesIO(pptx_bytes)).slides) == 2
 
 
-
-def test_build_pptx_multiple_content_types():
+def test_build_pptx_multiple_clone_actions():
     generator = _build_generator()
-    slides = [
-        {"slide_type": "title", "title": "T", "subtitle": "S"},
-        {"slide_type": "product", "title": "P", "bullets": ["B"]},
-        {"slide_type": "proof", "title": "Proof", "bullets": ["P"]},
-        {"slide_type": "investment", "title": "Inv", "bullets": ["I"]},
-        {"slide_type": "next_steps", "title": "Next", "bullets": ["N"]},
-    ]
-    pptx_bytes = generator._build_pptx(slides)
+    source_prs = Presentation(io.BytesIO(_blank_bytes()))
+    with patch.object(generator, "_load_pptx", return_value=source_prs):
+        slides = [
+            {"action": "cover", "title": "T", "subtitle": "S"},
+            _clone_slide_data("corpus/deck.pptx"),
+            _clone_slide_data("corpus/deck.pptx"),
+            _clone_slide_data("corpus/deck.pptx"),
+            _clone_slide_data("corpus/deck.pptx"),
+        ]
+        pptx_bytes = generator._build_pptx(slides)
     prs = Presentation(io.BytesIO(pptx_bytes))
     assert len(prs.slides) == 5
