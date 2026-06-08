@@ -88,7 +88,7 @@ class DeckGenerator:
         self._model = model
         self._s3 = boto3.client("s3")
         self._blank_bytes: bytes | None = None
-        self._pptx_cache: dict[str, Presentation] = {}
+        self._pptx_cache: dict[str, PresentationType] = {}
         self._rulebook_text: str | None = None
         self._api_key: str | None = None
         self._rate_sheet: str | None = None
@@ -144,7 +144,7 @@ class DeckGenerator:
 
         return new_slide
 
-    def _load_pptx(self, s3_key: str) -> Presentation:
+    def _load_pptx(self, s3_key: str) -> PresentationType:
         if s3_key not in self._pptx_cache:
             resp = self._s3.get_object(Bucket=self._bucket, Key=s3_key)
             self._pptx_cache[s3_key] = Presentation(io.BytesIO(resp["Body"].read()))
