@@ -1,3 +1,4 @@
+import csv
 import io
 import json
 import logging
@@ -171,31 +172,34 @@ class DeckGenerator:
     def _load_rate_sheet(self) -> str | None:
         if self._rate_sheet is None and self._rate_sheet_key:
             resp = self._s3.get_object(Bucket=self._bucket, Key=self._rate_sheet_key)
-            products = json.loads(resp["Body"].read())
+            reader = csv.DictReader(io.StringIO(resp["Body"].read().decode("utf-8")))
+            products = [row for row in reader if row.get("Inventory", "").strip()]
             lines = []
             for p in products:
-                parts = [p.get("Inventory", ""), p.get("Product Category", "")]
-                if p.get("Cadence"):
-                    parts.append(p["Cadence"])
-                if p.get("Vertical"):
-                    parts.append(f"Verticals: {p['Vertical']}")
-                if p.get("Audience Alignment"):
-                    parts.append(f"Audience: {p['Audience Alignment']}")
-                if p.get("Contextual Alignment"):
-                    parts.append(f"Context: {p['Contextual Alignment']}")
+                parts = [p.get("Inventory", "").strip(), p.get("Product Category", "").strip()]
+                if p.get("Cadence", "").strip():
+                    parts.append(p["Cadence"].strip())
+                if p.get("Vertical", "").strip():
+                    parts.append(f"Verticals: {p['Vertical'].strip()}")
+                if p.get("Audience Alignment", "").strip():
+                    parts.append(f"Audience: {p['Audience Alignment'].strip()}")
+                if p.get("Contextual Alignment", "").strip():
+                    parts.append(f"Context: {p['Contextual Alignment'].strip()}")
                 pricing = []
-                for label, key in [
+                for label, col in [
                     ("Daily", "Daily_Cost"), ("Weekly", "Weekly_Cost"),
                     ("Monthly", "Monthly_Cost"), ("Quarterly", "Quarterly_Cost"),
-                    ("Annual", "Annual_Cost"), ("CPM", "CPM_Rate"),
-                    ("Min", "Product_Minimum"), ("Flat Fee", "Flat_Fee"),
+                    ("Half-Year", "Half_Year_Cost"), ("Annual", "Annual_Cost"),
+                    ("CPM", "CPM_Rate"), ("Min", "Product_Minimum"), ("Flat Fee", "Flat_Fee"),
                 ]:
-                    if p.get(key):
-                        pricing.append(f"{label}: ${p[key]}")
+                    val = p.get(col, "").strip()
+                    if val:
+                        prefix = "" if val.startswith("$") else "$"
+                        pricing.append(f"{label}: {prefix}{val}")
                 if pricing:
                     parts.append(" | ".join(pricing))
-                if p.get("Notes"):
-                    parts.append(f"Notes: {p['Notes']}")
+                if p.get("Notes", "").strip():
+                    parts.append(f"Notes: {p['Notes'].strip()}")
                 lines.append(" | ".join(filter(None, parts)))
             self._rate_sheet = "\n".join(lines)
             logger.info("loaded rate sheet: %d products", len(products))

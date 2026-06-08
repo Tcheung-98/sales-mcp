@@ -8,6 +8,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import JSONResponse
 from starlette.routing import Route
 
+from ingestion import faq as faq_module
 from ingestion.generator import DeckGenerator
 from ingestion.retriever import SlideRetriever
 
@@ -33,6 +34,11 @@ mcp = FastMCP(
 
 _retriever: SlideRetriever | None = None
 _generator: DeckGenerator | None = None
+_s3 = None
+
+_S3_BUCKET = os.environ.get("S3_SNAPSHOT_BUCKET")
+_RATE_SHEET_KEY = os.environ.get("RATE_SHEET_KEY")
+_RULEBOOK_KEY = os.environ.get("RULEBOOK_KEY", "templates/rulebook.docx")
 
 
 def _get_retriever() -> SlideRetriever:
@@ -48,12 +54,33 @@ def _get_generator() -> DeckGenerator:
         _generator = DeckGenerator()
     return _generator
 
+
 @mcp.tool()
+def search_sales_knowledge(query: str, k: int = 5) -> dict:
+    """
+    Search Fortune's sales knowledge base. Returns pricing/rate card data, sales
+    guidelines, and relevant slide content for a given query. Use for any question
+    about Fortune products, pricing, packaging, or sales approach.
+    """
+    global _s3
+    if _s3 is None:
+        _s3 = boto3.client("s3")
+
+    return faq_module.search_sales_knowledge(
+        query=query,
+        retriever=_get_retriever(),
+        s3=_s3,
+        bucket=_S3_BUCKET,
+        rate_sheet_key=_RATE_SHEET_KEY,
+        rulebook_key=_RULEBOOK_KEY,
+        k=k,
+    )
+
+
 def search_decks(query: str, k: int = 5) -> list[dict]:
     """Search Fortune sales decks by semantic similarity. Returns the k most relevant slides."""
     return _get_retriever().search(query, k=k)
 
-@mcp.tool()
 def filter_decks_by_tags(
     industry: str | None = None,
     sub_industry: str | None = None,
@@ -86,7 +113,6 @@ def filter_decks_by_tags(
         limit=limit,
     )
 
-@mcp.tool()
 def get_slide_content(deck_id: str, slide_numbers: list[int] | None = None) -> list[dict]:
     """
     Retrieve full slide content (title, body text, layout) for a specific deck.
@@ -97,7 +123,6 @@ def get_slide_content(deck_id: str, slide_numbers: list[int] | None = None) -> l
     """
     return _get_retriever().get_slide_content(deck_id, slide_numbers)
 
-@mcp.tool()
 def generate_deck(brief: str, k: int = 10) -> dict:
     """
     Generate a Fortune-branded PowerPoint deck from a plain-text brief. Retrieves the
@@ -110,7 +135,6 @@ def generate_deck(brief: str, k: int = 10) -> dict:
     return _get_generator().generate(brief, context_slides)
 
 
-@mcp.tool()
 def hello(name: str) -> str:
     """Sanity check tool."""
     return f"Hello, {name}!"
