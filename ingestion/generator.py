@@ -2,10 +2,12 @@ import io
 import json
 import logging
 import os
+import re
 import uuid
 
 import anthropic
 import boto3
+from docx import Document
 from lxml import etree
 from pptx import Presentation
 from pptx.opc.constants import RELATIONSHIP_TYPE as RT
@@ -19,53 +21,46 @@ _SECRET_NAME = "fortune-sales-mcp/claude-api-key"
 _DEFAULT_MODEL = "claude-sonnet-4-6"
 _GENERATED_PREFIX = "generated"
 
-_SYSTEM_PROMPT = """\
-You are a senior AE at Fortune Media Group writing a custom pitch deck for a specific client.
+# Corpus slides use these strings as stand-ins for the client name.
+# All are matched case-insensitively so "Your Brand" and "YOUR BRAND" both swap.
+_CLIENT_NAME_PLACEHOLDERS = re.compile(
+    r"your brand|your company|client name|your organization",
+    re.IGNORECASE,
+)
 
-Return ONLY a JSON array — no prose, no markdown fences. Each element is one slide object
-with a "slide_type" field. Use exactly these types and fields:
+_SYSTEM_PROMPT_TEMPLATE = """\
+You are a senior AE at Fortune Media Group building a custom pitch deck for a specific client.
 
-  {"slide_type": "title",       "title": "...", "subtitle": "..."}
-  {"slide_type": "product",     "title": "...", "eyebrow": "...", "bullets": ["..."]}
-  {"slide_type": "proof",       "title": "...", "eyebrow": "...", "bullets": ["..."]}
-  {"slide_type": "investment",  "title": "...", "eyebrow": "...", "bullets": ["..."]}
-  {"slide_type": "next_steps",  "title": "...", "eyebrow": "...", "bullets": ["..."]}
+=== FORTUNE SALES SKILL — RULEBOOK ===
+{rulebook_text}
+=== END RULEBOOK ===
 
-Field rules:
-- "eyebrow": short ALL-CAPS label above the title (e.g. "RECOMMENDED PRODUCTS", \
-"PERFORMANCE DATA", "INVESTMENT", "NEXT STEPS"). Omit only if nothing fits.
-- "bullets": plain bullet fragments. Max 18 words each. Max 3 per slide.
+OUTPUT FORMAT
+Return ONLY a JSON array — no prose, no markdown fences. Each element is one slide.
 
-You will receive: (1) a client brief, (2) Fortune's product & rate card, \
-(3) reference slides from past Fortune decks.
+The first slide is always the cover:
+  {{"action": "cover", "title": "...", "subtitle": "..."}}
 
-How to use each input:
-- Brief: defines the client, their industry, their goal, their target audience — \
-every slide must speak directly to THIS client's situation
-- Rate card: pick 3-5 products that genuinely fit this client's vertical and audience; \
-use real product names, real audience descriptors, and real pricing — but price is the \
-last thing you lead with, not the first
-- Reference slides: pull in any specific performance stats, audience indices, reach numbers, \
-or proof points that are relevant to this client — these make bullets credible
+All other slides clone a real Fortune corpus slide by coordinate:
+  {{"action": "clone", "source_path": "...", "slide_number": 7,
+   "replacements": {{"title": "...", "client_name": "Acme Corp"}}}}
 
-Writing rules — write like a pitch, not a spec sheet:
-- Each bullet: product or proof point + why it fits THIS client. Max 18 words. No exceptions.
-- Lead with the value to the client, not the product name or the price
-- 3 bullets per slide maximum. Cut the weakest one if you have 4.
-- Fragments only. No full sentences.
-- No filler: ban "leverage", "synergy", "best-in-class", "cutting-edge", "seamless", \
-"robust", "drive engagement"
-- Pricing appears only on the investment slide, never elsewhere
+FIELD RULES
+- source_path and slide_number must come exactly from the candidate slides listed in the \
+user message — do not invent coordinates
+- replacements.client_name: always set to the client name from the brief; the engine will \
+replace "your brand" / "your company" / "your organization" in the cloned slide's text
+- replacements.title: set only if you want to override the corpus slide's existing title; \
+omit to keep the original
+- replacements.eyebrow: set only if you want to override the corpus slide's eyebrow label; \
+omit to keep the original
 
-Deck structure (slide_type, in order):
-1. title — client-specific headline naming their goal, never "Fortune Media Pitch"
-2. product × 1-2 — each product by what it does and who it reaches, tied to the client's \
-target audience; eyebrow "RECOMMENDED PRODUCTS"
-3. proof — performance stats or audience data from reference slides; eyebrow "PERFORMANCE \
-DATA"; omit this slide entirely if no relevant data exists in the reference slides
-4. investment — clean pricing tiers using real figures from the rate card; eyebrow \
-"INVESTMENT"; pricing appears ONLY here
-5. next_steps — 3 concrete actions with implied timeline; eyebrow "NEXT STEPS"\
+SELECTION RULES
+- Select 6–12 slides total including the cover
+- Prefer variety — draw from multiple source decks where candidates allow
+- Follow the arc, escalation, and voice rules in the rulebook above
+- The user message contains: (1) a client brief, (2) Fortune's rate card, \
+(3) candidate corpus slides with their coordinates — use all three\
 """
 
 
@@ -74,6 +69,7 @@ class DeckGenerator:
         self,
         bucket: str | None = None,
         blank_key: str | None = None,
+        rulebook_key: str | None = None,
         rate_sheet_key: str | None = None,
         secret_name: str = _SECRET_NAME,
         model: str = _DEFAULT_MODEL,
@@ -82,12 +78,16 @@ class DeckGenerator:
         self._blank_key = blank_key or os.environ.get(
             "PPTX_BLANK_DECK_KEY", "templates/blank.pptx"
         )
+        self._rulebook_key = rulebook_key or os.environ.get(
+            "RULEBOOK_KEY", "templates/rulebook.docx"
+        )
         self._rate_sheet_key = rate_sheet_key or os.environ.get("RATE_SHEET_KEY")
         self._secret_name = secret_name
         self._model = model
         self._s3 = boto3.client("s3")
         self._blank_bytes: bytes | None = None
         self._pptx_cache: dict[str, Presentation] = {}
+        self._rulebook_text: str | None = None
         self._api_key: str | None = None
         self._rate_sheet: str | None = None
 
@@ -178,6 +178,16 @@ class DeckGenerator:
             logger.info("loaded pptx from s3://%s/%s", self._bucket, s3_key)
         return self._pptx_cache[s3_key]
 
+    def _load_rulebook(self) -> str:
+        if self._rulebook_text is None:
+            resp = self._s3.get_object(Bucket=self._bucket, Key=self._rulebook_key)
+            doc = Document(io.BytesIO(resp["Body"].read()))
+            self._rulebook_text = "\n".join(
+                p.text for p in doc.paragraphs if p.text.strip()
+            )
+            logger.info("loaded rulebook from s3://%s/%s", self._bucket, self._rulebook_key)
+        return self._rulebook_text
+
     def _load_blank(self) -> bytes:
         if self._blank_bytes is None:
             resp = self._s3.get_object(Bucket=self._bucket, Key=self._blank_key)
@@ -237,7 +247,7 @@ class DeckGenerator:
 
     def _call_claude(self, brief: str, context_slides: list[dict]) -> list[dict]:
         context_text = "\n\n".join(
-            f"[Slide from {s.get('source_path', '').split('/')[-1]}]\n"
+            f"[source: {s.get('source_path', '')} | slide: {s.get('slide_number', '?')}]\n"
             f"Title: {s.get('title') or '(none)'}\n"
             + "\n".join(f"- {b}" for b in (s.get("body_text") or []))
             for s in context_slides
@@ -256,11 +266,15 @@ class DeckGenerator:
             f"\n\nReference slides from Fortune corpus:\n{context_text}"
         )
 
+        system_prompt = _SYSTEM_PROMPT_TEMPLATE.format(
+            rulebook_text=self._load_rulebook()
+        )
+
         client = anthropic.Anthropic(api_key=self._get_api_key())
         response = client.messages.create(
             model=self._model,
             max_tokens=4096,
-            system=_SYSTEM_PROMPT,
+            system=system_prompt,
             messages=[{"role": "user", "content": user_msg}],
         )
 
@@ -289,7 +303,36 @@ class DeckGenerator:
 
     @staticmethod
     def _apply_replacements(slide, replacements: dict) -> None:
-        pass  # implemented in step 4
+        if not replacements:
+            return
+
+        title = replacements.get("title")
+        eyebrow = replacements.get("eyebrow")
+        client_name = replacements.get("client_name")
+
+        # title / eyebrow: overwrite their placeholder slots
+        if title or eyebrow:
+            ph_map = {
+                ph.placeholder_format.idx: ph
+                for ph in slide.placeholders
+                if ph.has_text_frame
+            }
+            if title and (ph := ph_map.get(0)):
+                ph.text_frame.clear()
+                ph.text_frame.paragraphs[0].text = title
+            if eyebrow and (ph := ph_map.get(19)):
+                ph.text_frame.clear()
+                ph.text_frame.paragraphs[0].text = eyebrow
+
+        # client_name: find-and-replace within runs to preserve formatting
+        if client_name:
+            for shape in slide.shapes:
+                if not shape.has_text_frame:
+                    continue
+                for para in shape.text_frame.paragraphs:
+                    for run in para.runs:
+                        if _CLIENT_NAME_PLACEHOLDERS.search(run.text):
+                            run.text = _CLIENT_NAME_PLACEHOLDERS.sub(client_name, run.text)
 
     def _build_pptx(self, slides: list[dict]) -> bytes:
         blank = self._load_blank()
