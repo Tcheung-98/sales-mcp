@@ -18,6 +18,7 @@ dependencies = [
     "numpy>=2.2.6",
     "anthropic>=0.104.1",
     "openpyxl>=3.1.5",
+    "python-docx>=1.2.0",
 ]
 
 [dependency-groups]
