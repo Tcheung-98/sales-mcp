@@ -65,12 +65,14 @@ def search_sales_knowledge(query: str, k: int = 5) -> dict:
     global _s3
     if _s3 is None:
         _s3 = boto3.client("s3")
-
+    bucket = _S3_BUCKET
+    if not bucket:
+        raise ValueError("S3_SNAPSHOT_BUCKET environment variable is not set")
     return faq_module.search_sales_knowledge(
         query=query,
         retriever=_get_retriever(),
         s3=_s3,
-        bucket=_S3_BUCKET,
+        bucket=bucket,
         rate_sheet_key=_RATE_SHEET_KEY,
         rulebook_key=_RULEBOOK_KEY,
         k=k,
