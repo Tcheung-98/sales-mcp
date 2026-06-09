@@ -28,12 +28,15 @@ def run_ingest(
 
     for item in decks:
         deck_id = item["id"]
-        source_path = item.get("webUrl", item["name"])
+        sharepoint_url = item.get("webUrl", item["name"])
         try:
             pptx_bytes = client.download_deck(deck_id)
+            s3_key = f"corpus/{deck_id}.pptx"
+            writer._s3.put_object(Bucket=writer._bucket, Key=s3_key, Body=pptx_bytes)
+            logger.info("uploaded deck to s3://%s/%s", writer._bucket, s3_key)
             tags = client.extract_tags(item)
             rows = parse_pptx(
-                pptx_bytes, deck_id=deck_id, source_path=source_path,
+                pptx_bytes, deck_id=deck_id, source_path=s3_key,
                 ingested_at=run_ts, tags=tags,
             )
             slides.extend(rows)
@@ -41,7 +44,7 @@ def run_ingest(
             logger.warning("deck %s failed: %s", deck_id, exc)
             failed.append(FailedRecord(
                 deck_id=deck_id,
-                source_path=source_path,
+                source_path=sharepoint_url,
                 error=str(exc),
                 failed_at=run_ts,
                 layer="bronze",

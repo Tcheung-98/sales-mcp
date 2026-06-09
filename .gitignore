@@ -34,11 +34,7 @@ build/
 # OS / IDE
 .DS_Store
 .idea/
+.claude/
 
-# Plan Files
-*-plan.md
-*memory*
-goals*
-
-# Scratch Files
-*scratch*
+# Internal
+_internal/

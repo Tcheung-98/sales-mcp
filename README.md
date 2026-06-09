@@ -1,8 +1,12 @@
 # sales-mcp
 
-Internal Python MCP server exposing Fortune's closed-won sales decks to Claude Cowork via MCP. Deployed as a Docker container on AWS Lightsail.
+Internal Python MCP server that powers Prodie's pitch deck generation for Fortune sales associates.
+Associates have a conversation with Prodie about a client, confirm the product selection and budget,
+and Prodie uses this server to generate a Fortune-branded PPTX from the real closed-won corpus.
 
 Live endpoint: `https://fortune-sales-mcp.tj3ek8xjdg9br.us-east-1.cs.amazonlightsail.com`
+
+---
 
 ## Requirements
 
@@ -11,9 +15,9 @@ Live endpoint: `https://fortune-sales-mcp.tj3ek8xjdg9br.us-east-1.cs.amazonlight
 - Docker (for building/deploying)
 - AWS CLI (for deploying)
 
-## Environment setup
+---
 
-Copy `.env.example` to `.env` and fill in the values:
+## Environment setup
 
 ```bash
 cp .env.example .env
@@ -24,36 +28,15 @@ cp .env.example .env
 | `GRAPH_TENANT_ID` | Azure AD tenant ID |
 | `GRAPH_CLIENT_ID` | Azure AD app registration client ID |
 | `GRAPH_CLIENT_SECRET` | Azure AD app registration client secret |
-| `SHAREPOINT_SITE_ID` | SharePoint site ID (format: `hostname,site-guid,web-guid`) |
-| `S3_SNAPSHOT_BUCKET` | S3 bucket for Parquet snapshots (`fortune-sales-mcp-dev-artifacts` for dev, `fortune-sales-mcp-artifacts` for prod) |
-| `S3_SNAPSHOT_PREFIX` | S3 prefix for deck snapshots (default: `snapshots`) |
-| `S3_FAILED_PREFIX` | S3 prefix for failed-deck records (default: `failed`) |
+| `SHAREPOINT_SITE_ID` | SharePoint site ID (`hostname,site-guid,web-guid`) |
+| `S3_SNAPSHOT_BUCKET` | S3 bucket (`fortune-sales-mcp-dev-artifacts` for dev) |
+| `ANTHROPIC_API_KEY` | Anthropic API key (local dev only — prod uses Secrets Manager) |
+| `MCP_SHARED_SECRET` | Bearer token for Cowork → MCP auth |
+| `PPTX_BLANK_DECK_KEY` | S3 key for blank Fortune template (default: `templates/blank.pptx`) |
+| `RULEBOOK_KEY` | S3 key for Fortune GTM skill doc (default: `templates/rulebook.docx`) |
+| `RATE_SHEET_KEY` | S3 key for pricing master CSV |
 
-The Azure app registration requires `Sites.Read.All` and `Files.Read.All` application permissions (not delegated) granted by an admin.
-
-## Ingestion
-
-The ingestion pipeline walks the `GTM Current` SharePoint library, parses all `.pptx` decks, and writes Parquet snapshots to S3.
-
-```bash
-# Run a full ingest (requires .env populated)
-uv run python -c "
-from dotenv import load_dotenv; load_dotenv(dotenv_path='.env')
-from ingestion.ingestor import run_ingest
-slides, failed = run_ingest()
-print(f'slides: {len(slides)} | failed: {len(failed)}')
-"
-```
-
-Output lands at:
-- `s3://{S3_SNAPSHOT_BUCKET}/snapshots/{run_ts}/decks.parquet` — one row per slide
-- `s3://{S3_SNAPSHOT_BUCKET}/failed/{run_ts}/failed.parquet` — corrupt/unreadable decks (omitted if empty)
-
-Run tests:
-
-```bash
-uv run pytest
-```
+---
 
 ## Local dev
 
@@ -63,15 +46,38 @@ uv sync
 
 # Run with hot-reload
 uv run uvicorn server:app --reload --port 8000
-```
 
-To test tools interactively, point MCP Inspector at the local server:
-
-```bash
+# Test tools interactively
 npx @modelcontextprotocol/inspector http://localhost:8000/mcp
 ```
 
-The inspector runs in your browser and lets you call tools manually without writing curl commands. Set the `Authorization` header to `Bearer <MCP_SHARED_SECRET>` in the inspector's auth settings.
+Set `Authorization: Bearer <MCP_SHARED_SECRET>` in the inspector's auth settings.
+
+---
+
+## Ingestion
+
+Walks the SharePoint GTM library, parses all `.pptx` decks, uploads PPTX files to S3 corpus,
+and regenerates the embeddings snapshot.
+
+```bash
+uv run python scratch/run_ingest.py
+```
+
+Output:
+- `s3://bucket/corpus/{deck_id}.pptx` — source PPTX files for cloning
+- `s3://bucket/snapshots/{run_ts}/` — embeddings + slide metadata
+
+---
+
+## Tests
+
+```bash
+uv run pytest
+uv run ruff check .
+```
+
+---
 
 ## Deploy
 
@@ -82,7 +88,7 @@ docker buildx build --platform linux/amd64 --load -t fortune-sales-ai-mcp:dev .
 # 2. Push to Lightsail (bump label each release)
 aws lightsail push-container-image \
   --service-name fortune-sales-mcp \
-  --label v1-11 \
+  --label v1-X \
   --image fortune-sales-ai-mcp:dev
 
 # 3. Update containers.json with the new image digest printed above
@@ -94,27 +100,25 @@ aws lightsail create-container-service-deployment \
   --public-endpoint file://public-endpoint.json
 ```
 
-> **Note:** `containers.json` contains `MCP_SHARED_SECRET` and must not be committed. Use `containers.json.template` as a reference and keep your local `containers.json` gitignored.
->
-> Generate a secret with: `openssl rand -hex 32`
+`containers.json` contains `MCP_SHARED_SECRET` — never commit it. Use `containers.json.template`
+as reference. Generate a secret with `openssl rand -hex 32`.
+
+---
 
 ## Testing the live server
 
-The MCP streamable HTTP protocol requires an `initialize` handshake before any other call.
-
-**Step 1 — initialize and grab the session ID from the response headers:**
-
 ```bash
+# Health check (no auth)
+curl https://fortune-sales-mcp.tj3ek8xjdg9br.us-east-1.cs.amazonlightsail.com/health
+
+# Initialize session
 curl -s -D - -X POST https://fortune-sales-mcp.tj3ek8xjdg9br.us-east-1.cs.amazonlightsail.com/mcp \
   -H "Authorization: Bearer <MCP_SHARED_SECRET>" \
   -H "Content-Type: application/json" \
   -H "Accept: application/json, text/event-stream" \
   -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"test","version":"0.1"}}}'
-```
 
-**Step 2 — list tools (replace `SESSION_ID` with the value from the `mcp-session-id` header above):**
-
-```bash
+# List tools (replace SESSION_ID from mcp-session-id response header)
 curl -s -X POST https://fortune-sales-mcp.tj3ek8xjdg9br.us-east-1.cs.amazonlightsail.com/mcp \
   -H "Authorization: Bearer <MCP_SHARED_SECRET>" \
   -H "Content-Type: application/json" \
@@ -123,18 +127,33 @@ curl -s -X POST https://fortune-sales-mcp.tj3ek8xjdg9br.us-east-1.cs.amazonlight
   -d '{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}'
 ```
 
-**Health check (no auth required):**
-
-```bash
-curl https://fortune-sales-mcp.tj3ek8xjdg9br.us-east-1.cs.amazonlightsail.com/health
-```
+---
 
 ## Architecture decisions
 
-**Python + FastMCP** — MCP's official Python SDK (`mcp[cli]`). The standalone `fastmcp` PyPI package is not used; the SDK ships `mcp.server.fastmcp.FastMCP` directly.
+**Corpus-clone approach** — slides are cloned from real Fortune closed-won decks, not generated
+programmatically. Visual quality (typography, shapes, imagery) is preserved from the source.
+Client-specific text is replaced post-clone via placeholder targeting.
 
-**Streamable HTTP transport (not SSE)** — SSE was dropped because Lightsail's load balancer rewrites the `Host` header, causing the MCP SDK's DNS-rebinding protection to reject every request with 421. Streamable HTTP sidesteps this; DNS-rebinding protection is disabled at the SDK level via `TransportSecuritySettings` since the LB is already the trust boundary.
+**Schema-driven generation** — deck generation requires a fully hydrated `DeckSchema` (client,
+industry, budget, confirmed products). Prodie enforces sufficiency during conversation; the server
+validates independently via Pydantic. The arc (slide order) is constructed deterministically from
+the confirmed product list — no Claude call needed for structure.
 
-**AWS Lightsail container (not Lambda + Amplify)** — the MCP server is a long-running stateful process that holds SSE connections open. Lambda's execution model (short-lived, request/response) is a poor fit. Lightsail gives a persistent container with a public HTTPS endpoint and no cold-start latency.
+**Two-stage MCP surface** — `outline_deck(schema)` returns a human-readable arc for the AE to
+review. `build_deck(schema)` assembles and uploads the PPTX. Prodie mediates between stages.
 
-**v0 scope** — RAG retrieval and rate-card lookup only. LLM inference happens in Cowork via its native pptx skill; the server does not make Claude API calls. S3 is the storage layer for the deck corpus; no DynamoDB in v0.
+**In-memory vector search** — embeddings loaded into numpy at startup, cosine similarity at query
+time. No FAISS index; the corpus (2,404 slides) is small enough that in-memory search is fast and
+removes a dependency.
+
+**Streamable HTTP transport** — SSE dropped because Lightsail's load balancer rewrites the `Host`
+header, triggering the MCP SDK's DNS-rebinding protection with 421 errors. DNS-rebinding protection
+disabled at the SDK level via `TransportSecuritySettings`; the LB is the trust boundary.
+
+**Anthropic API (not Bedrock Claude)** — generation uses the Anthropic API directly. Bedrock is
+used only for embeddings (Titan Text v2). API key stored in AWS Secrets Manager; local dev uses
+`ANTHROPIC_API_KEY` env var.
+
+**Python + FastMCP** — official MCP Python SDK (`mcp[cli]`). Do not use the standalone `fastmcp`
+PyPI package; the SDK ships `mcp.server.fastmcp.FastMCP` directly.
