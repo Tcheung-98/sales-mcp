@@ -1,14 +1,11 @@
 import os
 
-import boto3
-from botocore.exceptions import BotoCoreError, ClientError
 from mcp.server.fastmcp import FastMCP
 from mcp.server.fastmcp.server import TransportSecuritySettings
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import JSONResponse
 from starlette.routing import Route
 
-from ingestion.generator import DeckGenerator
 from ingestion.retriever import SlideRetriever
 
 _EXPECTED_TOKEN = os.environ.get("MCP_SHARED_SECRET")
@@ -16,9 +13,8 @@ _EXPECTED_TOKEN = os.environ.get("MCP_SHARED_SECRET")
 
 class AuthMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request, call_next):
-        if request.url.path in ("/health", "/secrets-check"):
+        if request.url.path == "/health":
             return await call_next(request)
-        # Fail closed if the secret was never injected into the environment.
         if not _EXPECTED_TOKEN:
             return JSONResponse({"error": "server misconfigured"}, status_code=503)
         auth = request.headers.get("authorization", "")
@@ -26,13 +22,13 @@ class AuthMiddleware(BaseHTTPMiddleware):
             return JSONResponse({"error": "unauthorized"}, status_code=401)
         return await call_next(request)
 
+
 mcp = FastMCP(
     "Sales MCP",
     transport_security=TransportSecuritySettings(enable_dns_rebinding_protection=False),
 )
 
 _retriever: SlideRetriever | None = None
-_generator: DeckGenerator | None = None
 
 
 def _get_retriever() -> SlideRetriever:
@@ -42,16 +38,11 @@ def _get_retriever() -> SlideRetriever:
     return _retriever
 
 
-def _get_generator() -> DeckGenerator:
-    global _generator
-    if _generator is None:
-        _generator = DeckGenerator()
-    return _generator
-
 @mcp.tool()
 def search_decks(query: str, k: int = 5) -> list[dict]:
     """Search Fortune sales decks by semantic similarity. Returns the k most relevant slides."""
     return _get_retriever().search(query, k=k)
+
 
 @mcp.tool()
 def filter_decks_by_tags(
@@ -86,6 +77,7 @@ def filter_decks_by_tags(
         limit=limit,
     )
 
+
 @mcp.tool()
 def get_slide_content(deck_id: str, slide_numbers: list[int] | None = None) -> list[dict]:
     """
@@ -97,43 +89,14 @@ def get_slide_content(deck_id: str, slide_numbers: list[int] | None = None) -> l
     """
     return _get_retriever().get_slide_content(deck_id, slide_numbers)
 
-@mcp.tool()
-def generate_deck(brief: str, k: int = 10) -> dict:
-    """
-    Generate a Fortune-branded PowerPoint deck from a plain-text brief. Retrieves the
-    k most relevant slides from the corpus as grounding context, then calls Claude to
-    author the slide content following Fortune's style. Returns a presigned S3 download
-    URL (valid 24 hours), the S3 URI, slide count, and the original brief.
-    Use this when an account executive provides a brief and wants a ready-to-use deck.
-    """
-    context_slides = _get_retriever().search(brief, k=k)
-    return _get_generator().generate(brief, context_slides)
-
-
-@mcp.tool()
-def hello(name: str) -> str:
-    """Sanity check tool."""
-    return f"Hello, {name}!"
 
 async def health(request):
     return JSONResponse({"status": "ok"})
 
-# Temporary to test IAM deployment and permissions. Will delete after confirming the secret check.
-async def secrets_check(request):
-    secret_name = "fortune-sales-mcp/claude-api-key"
-    try:
-        client = boto3.client("secretsmanager", region_name="us-east-1")
-        client.get_secret_value(SecretId=secret_name)
-        return JSONResponse({"status": "ok", "secret": secret_name})
-    except ClientError as e:
-        return JSONResponse({"status": "error", "detail": str(e)}, status_code=500)
-    except BotoCoreError as e:
-        return JSONResponse({"status": "error", "detail": str(e)}, status_code=500)
 
 app = mcp.streamable_http_app()
 
 app.routes.append(Route("/health", health))
-app.routes.append(Route("/secrets-check", secrets_check))
 app.add_middleware(AuthMiddleware)
 
 if __name__ == "__main__":
