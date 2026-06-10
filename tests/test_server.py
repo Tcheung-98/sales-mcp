@@ -1,10 +1,6 @@
 from unittest.mock import MagicMock
 
-from server import filter_decks_by_tags, get_slide_content, hello, search_decks
-
-
-def test_hello():
-    assert hello(name="world") == "Hello, world!"
+from server import filter_decks_by_tags, get_slide_content, search_decks
 
 
 def test_search_decks_delegates_to_retriever(mocker):
