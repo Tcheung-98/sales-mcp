@@ -205,20 +205,28 @@ def test_call_claude_context_includes_full_coordinates():
     generator._rulebook_text = "Rule: always lead with value."
     generator._api_key = "test-key"
 
-    context_slides = [
-        {
-            "source_path": "corpus/Fortune_GP_2026.pptx",
-            "slide_number": 7,
-            "title": "Market Opportunity",
-            "body_text": ["$10B TAM", "Fortune reach: 42M"],
-        },
-        {
-            "source_path": "corpus/Fortune_500_2025.pptx",
-            "slide_number": 3,
-            "title": "Audience",
-            "body_text": [],
-        },
+    arc = [
+        {"slot": 0, "role": "opener", "query": "market opportunity audience"},
+        {"slot": 1, "role": "product", "query": "audience reach"},
     ]
+    context_by_slot = {
+        0: [
+            {
+                "source_path": "corpus/Fortune_GP_2026.pptx",
+                "slide_number": 7,
+                "title": "Market Opportunity",
+                "body_text": ["$10B TAM", "Fortune reach: 42M"],
+            }
+        ],
+        1: [
+            {
+                "source_path": "corpus/Fortune_500_2025.pptx",
+                "slide_number": 3,
+                "title": "Audience",
+                "body_text": [],
+            }
+        ],
+    }
 
     captured: dict = {}
 
@@ -234,7 +242,7 @@ def test_call_claude_context_includes_full_coordinates():
 
     with patch("anthropic.Anthropic") as MockAnthropic:
         MockAnthropic.return_value.messages.create.side_effect = fake_create
-        generator._call_claude("Test brief", context_slides)
+        generator._call_claude("Test brief", arc, context_by_slot)
 
     user_msg = captured["user_msg"]
     assert "corpus/Fortune_GP_2026.pptx" in user_msg
