@@ -17,6 +17,30 @@ _VALID_INDUSTRIES = {
 }
 _ESCALATION_THRESHOLD = 750_000
 
+# Template filenames in the Fortune Sales Automation SharePoint folder.
+# Industry templates are the default; franchise templates take precedence when a product name
+# matches a known franchise keyword. Fall back to general if no match found.
+# v1: replace these dicts with a config JSON loaded from S3 so GTM can update without a deploy.
+_INDUSTRY_TEMPLATES: dict[str, str] = {
+    "Tech": "Category_Presentation_Technology.pptx.url",
+    "Financial Services": "Category_Presentation_Financial.pptx.url",
+    "Healthcare": "Category_Presentation_Healthcare.pptx.url",
+    "Luxury": "Category_Presentation_Luxury.pptx.url",
+    "Energy": "Category_Presentation_Energy.pptx.url",
+    "Professional Services": "Category_Presentation_Professional_Services.pptx.url",
+    "Economic Development": "Category_Presentation_Economic_Development.pptx.url",
+}
+
+_FRANCHISE_KEYWORDS: dict[str, str] = {
+    "Fortune 500": "Franchise_Presentation_Fortune_500.pptx.url",
+    "Fortune Daily": "Franchise_Presentation_Fortune_Daily.pptx.url",
+    "Fortune CFO": "Franchise_Presentation_Fortune_CFO.pptx.url",
+    "Fortune CIO": "Franchise_Presentation_Fortune_CIO.pptx.url",
+    "Crypto": "Franchise_Presentation_Crypto.pptx.url",
+}
+
+_GENERAL_TEMPLATE = "General_Presentation_Fortune_Overall.pptx.url"
+
 
 class Product(BaseModel):
     name: str
@@ -85,47 +109,22 @@ class DeckSchema(BaseModel):
         return v
 
 
-def build_arc(schema: DeckSchema) -> list[dict]:
-    slots = []
-    i = 0
+def select_template(schema: DeckSchema) -> str:
+    """Return the SharePoint template filename for a given schema.
 
-    # Cover: always clones blank template slide 0, no corpus search needed
-    slots.append({"slot": i, "role": "cover", "query": ""})
-    i += 1
-
-    opener_query = f"{schema.industry} audience reach market opportunity Fortune"
-    if schema.buyer_persona:
-        opener_query = f"{schema.buyer_persona} {opener_query}"
-    slots.append({"slot": i, "role": "opener", "query": opener_query})
-    i += 1
-
-    for product in schema.confirmed_products:
-        slots.append({
-            "slot": i,
-            "role": "product",
-            "query": f"{product.name} {product.cadence} Fortune pitch",
-        })
-        i += 1
-
+    Franchise templates take precedence over industry templates when a confirmed
+    product name contains a known franchise keyword. Falls back to the general
+    template if no industry or franchise match is found.
+    """
+    all_product_names = " ".join(p.name for p in schema.confirmed_products)
     if schema.upsell:
-        slots.append({
-            "slot": i,
-            "role": "upsell",
-            "query": f"{schema.upsell.name} upsell add-on Fortune",
-        })
-        i += 1
+        all_product_names += f" {schema.upsell.name}"
 
-    slots.append({
-        "slot": i,
-        "role": "investment",
-        "query": "pricing investment bundled proposal rate",
-    })
-    i += 1
+    for keyword, filename in _FRANCHISE_KEYWORDS.items():
+        if keyword.lower() in all_product_names.lower():
+            return filename
 
-    slots.append({
-        "slot": i,
-        "role": "next_steps",
-        "query": "next steps timeline partnership proposal",
-    })
+    if filename := _INDUSTRY_TEMPLATES.get(schema.industry):
+        return filename
 
-    return slots
+    return _GENERAL_TEMPLATE

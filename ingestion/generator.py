@@ -1,11 +1,9 @@
-import csv
 import io
 import json
 import logging
 import os
 import re
 
-import anthropic
 import boto3
 from docx import Document
 from lxml import etree
@@ -15,6 +13,8 @@ from pptx.oxml import parse_xml
 from pptx.oxml.ns import qn
 from pptx.presentation import Presentation as PresentationType
 from pypdf import PdfReader
+
+from ingestion.schema import DeckSchema
 
 logger = logging.getLogger(__name__)
 
@@ -31,92 +31,47 @@ _CLIENT_NAME_PLACEHOLDERS = re.compile(
 )
 
 
-_SYSTEM_PROMPT_TEMPLATE = """\
-You are a senior AE at Fortune Media Group building a custom pitch deck for a specific client.
+_VOICE_RULES = """\
+You are a senior AE at Fortune Media Group writing a custom pitch deck for a specific client. \
+Your job is to persuade, not to describe. Every word you write should make the client feel that \
+Fortune is the obvious partner for their business goals.
 
 === FORTUNE SALES SKILL — RULEBOOK ===
 {rulebook_text}
 === END RULEBOOK ===
 
-OUTPUT FORMAT
-Return ONLY a JSON array — no prose, no markdown fences. One element per arc slot, in slot order.
-
-Slot 1 (cover) is always:
-  {{"action": "cover", "title": "...", "subtitle": "..."}}
-
-All other slots clone a corpus slide:
-  {{
-    "action": "clone",
-    "source_path": "...",
-    "slide_number": 7,
-    "reasoning": "One sentence: why this slide fits this slot and client.",
-    "replacements": {{
-      "title": "...",
-      "client_name": "Acme Corp",
-      "body": ["P1 text", "P2 text", ...]
-    }}
-  }}
-
-FIELD RULES
-- For each non-cover slot, pick exactly one slide from THAT SLOT'S candidates
-- Do not use candidates listed under a different slot
-- source_path and slide_number must come exactly from the candidates shown for that slot
-- reasoning: required on every clone — explain why this slide fits this slot's role
-- replacements.client_name: always set to the client name from the brief
-- replacements.title: override if needed; omit to keep original
-- replacements.eyebrow: override if needed; omit to keep original
-- replacements.body: rewrite paragraphs to be client-specific. Match the P1/P2/... structure \
-shown. Preserve structural headers; rewrite descriptive copy. 18 words max per bullet. \
-OMIT body entirely for: (1) data-heavy slides — audience metrics, bar charts, structured \
-tables, When/Where/Who grids, pricing tables; (2) event/conference slides (Brainstorm, \
-live events, summits) — their value is in the visual design and event details table, not \
-rewritten prose. For investment slides, limit body to 5 bullets maximum — one per product \
-line, no sub-bullets, no notes. Only provide body for slides with a clear narrative text \
-block and no data visualization or event details table.
-
-SELECTION RULES
-- Output exactly one slide per slot, in slot order
-- Follow the arc, escalation, and voice rules in the rulebook above
-- Use the rate card for accurate product names and pricing\
+VOICE RULES — apply to every word you write
+- Write like a pitch, not a spec sheet. Lead with what the client gains, not what the product does.
+- Each bullet: one client benefit + one proof point. 18 words max. Fragments are fine.
+- 3 bullets per slide maximum. Cut the weakest if you have 4.
+- Translate specs into outcomes. "100% SOV" becomes "CrowdStrike owns every impression." \
+"42% unique open rate" becomes "42 of every 100 readers opens this. Above every benchmark."
+- Pricing lives on the investment slide only. Never mention $ or cost on any other slide.
+- Address the client directly and specifically. "CrowdStrike's buyers" not "your target audience." \
+"The CISOs Fortune reaches" not "decision makers."
+- Never use: em dashes, "leverage", "synergy", "best-in-class", "cutting-edge", "seamless", \
+"robust", "drive engagement", "unlock", "elevate".\
 """
-
-
-def _format_slide(s: dict) -> str:
-    lines = [
-        f"[source: {s.get('source_path', '')} | slide: {s.get('slide_number', '?')}]",
-        f"Title: {s.get('title') or '(none)'}",
-    ]
-    for i, b in enumerate(s.get("body_text") or [], start=1):
-        lines.append(f"P{i}: {b}")
-    return "\n".join(lines)
 
 
 class DeckGenerator:
     def __init__(
         self,
         bucket: str | None = None,
-        blank_key: str | None = None,
         rulebook_key: str | None = None,
-        rate_sheet_key: str | None = None,
         secret_name: str = _SECRET_NAME,
         model: str = _DEFAULT_MODEL,
     ) -> None:
         self._bucket = bucket or os.environ["S3_SNAPSHOT_BUCKET"]
-        self._blank_key = blank_key or os.environ.get(
-            "PPTX_BLANK_DECK_KEY", "templates/blank.pptx"
-        )
         self._rulebook_key = rulebook_key or os.environ.get(
             "RULEBOOK_KEY", "templates/rulebook.docx"
         )
-        self._rate_sheet_key = rate_sheet_key or os.environ.get("RATE_SHEET_KEY")
         self._secret_name = secret_name
         self._model = model
         self._s3 = boto3.client("s3")
-        self._blank_bytes: bytes | None = None
         self._pptx_cache: dict[str, PresentationType] = {}
         self._rulebook_text: str | None = None
         self._api_key: str | None = None
-        self._rate_sheet: str | None = None
 
     @staticmethod
     def _clone_slide(
@@ -209,105 +164,6 @@ class DeckGenerator:
             except (json.JSONDecodeError, StopIteration):
                 self._api_key = raw
         return self._api_key
-
-    def _call_claude(
-        self, brief: str, arc: list[dict], context_by_slot: dict[int, list[dict]]
-    ) -> list[dict]:
-        context_parts = []
-        for slot in arc:
-            if not slot.get("query"):
-                continue
-            candidates = context_by_slot.get(slot["slot"], [])
-            if not candidates:
-                continue
-            context_parts.append(
-                f"=== Slot {slot['slot']}: {slot['role'].upper()} ===\n"
-                + "\n\n".join(_format_slide(s) for s in candidates)
-            )
-        context_text = "\n\n".join(context_parts)
-
-        arc_summary = "\n".join(
-            f"  Slot {s['slot']}: {s['role']}" for s in arc
-        )
-
-        if self._rate_sheet is None and self._rate_sheet_key:
-            resp = self._s3.get_object(Bucket=self._bucket, Key=self._rate_sheet_key)
-            reader = csv.DictReader(io.StringIO(resp["Body"].read().decode("cp1252")))
-            products = [row for row in reader if row.get("Inventory", "").strip()]
-            lines = []
-            for p in products:
-                parts = [p.get("Inventory", "").strip(), p.get("Product Category", "").strip()]
-                if p.get("Cadence", "").strip():
-                    parts.append(p["Cadence"].strip())
-                if p.get("Vertical", "").strip():
-                    parts.append(f"Verticals: {p['Vertical'].strip()}")
-                if p.get("Audience Alignment", "").strip():
-                    parts.append(f"Audience: {p['Audience Alignment'].strip()}")
-                if p.get("Contextual Alignment", "").strip():
-                    parts.append(f"Context: {p['Contextual Alignment'].strip()}")
-                pricing = []
-                for label, col in [
-                    ("Daily", "Daily_Cost"), ("Weekly", "Weekly_Cost"),
-                    ("Monthly", "Monthly_Cost"), ("Quarterly", "Quarterly_Cost"),
-                    ("Half-Year", "Half_Year_Cost"), ("Annual", "Annual_Cost"),
-                    ("CPM", "CPM_Rate"), ("Min", "Product_Minimum"), ("Flat Fee", "Flat_Fee"),
-                ]:
-                    val = p.get(col, "").strip()
-                    if val:
-                        prefix = "" if val.startswith("$") else "$"
-                        pricing.append(f"{label}: {prefix}{val}")
-                if pricing:
-                    parts.append(" | ".join(pricing))
-                if p.get("Notes", "").strip():
-                    parts.append(f"Notes: {p['Notes'].strip()}")
-                lines.append(" | ".join(filter(None, parts)))
-            self._rate_sheet = "\n".join(lines)
-            logger.info("loaded rate sheet: %d products", len(products))
-        rate_section = (
-            f"\n\nFortune product & rate card (use for accurate product names and pricing):\n"
-            f"{self._rate_sheet}"
-            if self._rate_sheet else ""
-        )
-
-        user_msg = (
-            f"Brief:\n{brief}"
-            f"\n\nDeck arc to fill:\n{arc_summary}"
-            f"{rate_section}"
-            f"\n\nCandidate slides organized by slot:\n{context_text}"
-        )
-
-        system_prompt = _SYSTEM_PROMPT_TEMPLATE.format(
-            rulebook_text=self._load_rulebook()
-        )
-
-        client = anthropic.Anthropic(api_key=self._get_api_key())
-        response = client.messages.create(
-            model=self._model,
-            max_tokens=4096,
-            system=system_prompt,
-            messages=[{"role": "user", "content": user_msg}],
-        )
-
-        logger.info(
-            "claude usage — input: %d tokens, output: %d tokens, cost: $%.4f",
-            response.usage.input_tokens,
-            response.usage.output_tokens,
-            (response.usage.input_tokens / 1_000_000 * _COST_PER_M_INPUT)
-            + (response.usage.output_tokens / 1_000_000 * _COST_PER_M_OUTPUT),
-        )
-        block = response.content[0]
-        if not isinstance(block, anthropic.types.TextBlock):
-            raise ValueError(f"Unexpected response block type: {type(block)}")
-        raw = block.text.strip()
-        # Strip markdown fences if Claude ignored the prompt instruction
-        if raw.startswith("```"):
-            raw = raw.split("\n", 1)[-1]
-            raw = raw.rsplit("```", 1)[0].strip()
-        logger.debug("claude raw response: %s", raw[:200])
-        slides = json.loads(raw)
-        if not isinstance(slides, list):
-            raise ValueError(f"Claude returned non-list JSON: {type(slides)}")
-        return slides
 
     @staticmethod
     def _dedup_shape_ids(slide, output_prs) -> None:
@@ -413,47 +269,12 @@ class DeckGenerator:
                         if _CLIENT_NAME_PLACEHOLDERS.search(run.text):
                             run.text = _CLIENT_NAME_PLACEHOLDERS.sub(client_name, run.text)
 
-    def _build_pptx(self, slides: list[dict]) -> bytes:
-        if self._blank_bytes is None:
-            resp = self._s3.get_object(Bucket=self._bucket, Key=self._blank_key)
-            self._blank_bytes = resp["Body"].read()
-            logger.info("loaded blank template from s3://%s/%s", self._bucket, self._blank_key)
-        blank_prs = Presentation(io.BytesIO(self._blank_bytes))  # cover slide source
-        output_prs = Presentation(io.BytesIO(self._blank_bytes))  # output deck
+    def build(self, schema: DeckSchema, template_url: str) -> dict:
+        """Build a deck by populating the approved template with client-specific copy.
 
-        # Drop relationship AND sldId element for each seed slide
-        for sld_id in list(output_prs.slides._sldIdLst):
-            r_id = sld_id.get(qn("r:id"))
-            output_prs.part.drop_rel(r_id)
-            output_prs.slides._sldIdLst.remove(sld_id)
-
-        for slide_data in slides:
-            action = slide_data.get("action", "clone")
-            if action == "cover":
-                slide = self._clone_slide(blank_prs, 0, output_prs)
-                DeckGenerator._dedup_shape_ids(slide, output_prs)
-                ph_map = {
-                    ph.placeholder_format.idx: ph
-                    for ph in slide.placeholders
-                    if ph.has_text_frame
-                }
-                for title_idx in (12, 0):
-                    if ph := ph_map.get(title_idx):
-                        DeckGenerator._set_ph_text(ph, slide_data.get("title", ""))
-                        break
-                for sub_idx in (10, 1):
-                    if ph := ph_map.get(sub_idx):
-                        DeckGenerator._set_ph_text(ph, slide_data.get("subtitle", ""))
-                        break
-            elif action == "clone":
-                source_prs = self._load_pptx(slide_data["source_path"])
-                slide = self._clone_slide(source_prs, slide_data["slide_number"] - 1, output_prs)
-                DeckGenerator._dedup_shape_ids(slide, output_prs)
-                self._apply_replacements(slide, slide_data.get("replacements", {}))
-            else:
-                raise ValueError(f"Unknown slide action: {action!r}")
-
-        buf = io.BytesIO()
-        output_prs.save(buf)
-        return buf.getvalue()
+        template_url: pre-authenticated URL to the actual .pptx file, resolved and
+        provided by Prodie from the Fortune Sales Automation SharePoint folder.
+        Returns a presigned S3 URL valid for 24h.
+        """
+        raise NotImplementedError("template-populate build not yet implemented")
 
