@@ -124,6 +124,22 @@ class DeckGenerator:
 
         return new_slide
 
+    @staticmethod
+    def _delete_slide(prs: PresentationType, slide_idx: int) -> None:
+        sld_id_lst = prs.slides._sldIdLst
+        sld_id = sld_id_lst[slide_idx]
+        r_id = sld_id.get(qn("r:id"))
+        prs.part.drop_rel(r_id)
+        sld_id_lst.remove(sld_id)
+
+    @staticmethod
+    def _insert_slide_at(prs: PresentationType, position: int) -> None:
+        # _clone_slide always appends; move the last sldId to the target position
+        sld_id_lst = prs.slides._sldIdLst
+        sld_id = sld_id_lst[-1]
+        sld_id_lst.remove(sld_id)
+        sld_id_lst.insert(position, sld_id)
+
     def _load_pptx(self, s3_key: str) -> PresentationType:
         if s3_key not in self._pptx_cache:
             resp = self._s3.get_object(Bucket=self._bucket, Key=s3_key)

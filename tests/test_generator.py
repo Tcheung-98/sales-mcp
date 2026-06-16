@@ -100,6 +100,45 @@ def _rulebook_bytes(text: str = "Rule 1: always outline first.\nRule 2: $750K es
     return buf.getvalue()
 
 
+def _presentation_with_n_slides(n: int) -> Presentation:
+    prs = Presentation()
+    for _ in range(n):
+        prs.slides.add_slide(prs.slide_layouts[1])
+    return prs
+
+
+def test_delete_slide_removes_slide():
+    prs = _presentation_with_n_slides(3)
+    DeckGenerator._delete_slide(prs, 1)
+    assert len(prs.slides) == 2
+
+
+def test_delete_slide_correct_slide_removed():
+    prs = _presentation_with_n_slides(3)
+    titles = ["A", "B", "C"]
+    for slide, title in zip(prs.slides, titles):
+        slide.shapes.title.text = title
+    DeckGenerator._delete_slide(prs, 1)
+    remaining = [s.shapes.title.text for s in prs.slides]
+    assert remaining == ["A", "C"]
+
+
+def test_insert_slide_at_moves_to_position():
+    prs = _presentation_with_n_slides(3)
+    titles = ["A", "B", "C"]
+    for slide, title in zip(prs.slides, titles):
+        slide.shapes.title.text = title
+    # Clone slide 0 (A) — appends as slide 3, then move it to position 1
+    source_prs = _presentation_with_n_slides(1)
+    source_prs.slides[0].shapes.title.text = "NEW"
+    DeckGenerator._clone_slide(source_prs, 0, prs)
+    DeckGenerator._insert_slide_at(prs, 1)
+    assert len(prs.slides) == 4
+    assert prs.slides[1].shapes.title.text == "NEW"
+    assert prs.slides[0].shapes.title.text == "A"
+    assert prs.slides[2].shapes.title.text == "B"
+
+
 def test_load_rulebook_extracts_text():
     generator = _build_generator()
     generator._s3.get_object.return_value = {"Body": io.BytesIO(_rulebook_bytes())}
