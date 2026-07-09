@@ -112,10 +112,13 @@ class DeckSchema(BaseModel):
 def select_template(schema: DeckSchema) -> str:
     """Return the SharePoint template filename for a given schema.
 
-    Franchise templates take precedence over industry templates when a confirmed
-    product name contains a known franchise keyword. Falls back to the general
-    template if no industry or franchise match is found.
+    Industry is the primary signal. Franchise templates are used only as a
+    fallback when no industry template exists. Falls back to general if neither
+    matches.
     """
+    if filename := _INDUSTRY_TEMPLATES.get(schema.industry):
+        return filename
+
     all_product_names = " ".join(p.name for p in schema.confirmed_products)
     if schema.upsell:
         all_product_names += f" {schema.upsell.name}"
@@ -123,8 +126,5 @@ def select_template(schema: DeckSchema) -> str:
     for keyword, filename in _FRANCHISE_KEYWORDS.items():
         if keyword.lower() in all_product_names.lower():
             return filename
-
-    if filename := _INDUSTRY_TEMPLATES.get(schema.industry):
-        return filename
 
     return _GENERAL_TEMPLATE

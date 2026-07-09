@@ -103,7 +103,7 @@ def get_slide_content(deck_id: str, slide_numbers: list[int] | None = None) -> l
 
 
 @mcp.tool()
-def outline_deck(schema: dict) -> dict:
+def prepare_deck(schema: dict) -> dict:
     """
     Validate a deck schema and return the template that would be used for AE review.
     Call this before build_deck. Returns status 'ok' with template_filename if valid,
@@ -137,8 +137,15 @@ def build_deck(schema: dict, template_url: str) -> dict:
     Validates the schema, populates the template with client-specific copy via
     Claude, uploads to S3, and returns a presigned download URL valid for 24h.
     """
-    parsed = DeckSchema.model_validate(schema)
-    return _get_generator().build(parsed, template_url)
+    try:
+        parsed = DeckSchema.model_validate(schema)
+    except ValidationError as exc:
+        errors = [f"{'.'.join(str(p) for p in e['loc'])}: {e['msg']}" for e in exc.errors()]
+        return {"status": "error", "message": "; ".join(errors)}
+    try:
+        return _get_generator().build(parsed, template_url, _get_retriever())
+    except ValueError as exc:
+        return {"status": "error", "message": str(exc)}
 
 
 async def health(request):

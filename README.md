@@ -140,8 +140,8 @@ industry, budget, confirmed products). Prodie enforces sufficiency during conver
 validates independently via Pydantic. The arc (slide order) is constructed deterministically from
 the confirmed product list — no Claude call needed for structure.
 
-**Two-stage MCP surface** — `outline_deck(schema)` returns a human-readable arc for the AE to
-review. `build_deck(schema)` assembles and uploads the PPTX. Prodie mediates between stages.
+**Two-stage MCP surface** — `prepare_deck(schema)` validates the schema and returns the template filename for the AE to
+review. `build_deck(schema, template_url)` assembles and uploads the PPTX. Prodie mediates between stages.
 
 **In-memory vector search** — embeddings loaded into numpy at startup, cosine similarity at query
 time. No FAISS index; the corpus (2,404 slides) is small enough that in-memory search is fast and

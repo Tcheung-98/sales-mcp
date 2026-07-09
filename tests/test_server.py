@@ -1,6 +1,6 @@
 from unittest.mock import MagicMock
 
-from server import build_deck, filter_decks_by_tags, get_slide_content, outline_deck, search_decks
+from server import build_deck, filter_decks_by_tags, get_slide_content, prepare_deck, search_decks
 
 
 def _valid_schema(**overrides) -> dict:
@@ -52,22 +52,22 @@ def test_get_slide_content_no_slide_numbers(mocker):
     mock_retriever.get_slide_content.assert_called_once_with("d1", None)
 
 
-def test_outline_deck_valid_returns_template_filename():
-    result = outline_deck(schema=_valid_schema())
+def test_prepare_deck_valid_returns_template_filename():
+    result = prepare_deck(schema=_valid_schema())
     assert result["status"] == "ok"
     assert "template_filename" in result
     assert result["template_filename"].endswith(".pptx.url")
 
 
-def test_outline_deck_missing_fields_returns_incomplete():
-    result = outline_deck(schema={"client_name": "Acme Corp"})
+def test_prepare_deck_missing_fields_returns_incomplete():
+    result = prepare_deck(schema={"client_name": "Acme Corp"})
     assert result["status"] == "incomplete"
     assert "industry" in result["missing"]
     assert "budget_quarterly" in result["missing"]
 
 
-def test_outline_deck_escalation_budget():
-    result = outline_deck(schema=_valid_schema(budget_quarterly=750_000))
+def test_prepare_deck_escalation_budget():
+    result = prepare_deck(schema=_valid_schema(budget_quarterly=750_000))
     assert result["status"] == "escalation"
     assert "GTM" in result["message"]
 
@@ -81,7 +81,9 @@ def test_build_deck_delegates_to_generator(mocker):
     }
     mock_generator = MagicMock()
     mock_generator.build.return_value = fake_result
+    mock_retriever = MagicMock()
     mocker.patch("server._get_generator", return_value=mock_generator)
+    mocker.patch("server._get_retriever", return_value=mock_retriever)
     result = build_deck(
         schema=_valid_schema(),
         template_url="https://sharepoint.example.com/template.pptx",

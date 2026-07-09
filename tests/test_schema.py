@@ -55,7 +55,8 @@ def test_select_template_industry_match():
     assert select_template(schema) == "Category_Presentation_Technology.pptx.url"
 
 
-def test_select_template_franchise_takes_precedence():
+def test_select_template_industry_beats_franchise():
+    # Industry match wins even when a franchise keyword appears in a product name.
     schema = DeckSchema.model_validate(
         _valid_schema(
             industry="Tech",
@@ -69,22 +70,6 @@ def test_select_template_franchise_takes_precedence():
             ],
         )
     )
-    assert select_template(schema) == "Franchise_Presentation_Fortune_CFO.pptx.url"
-
-
-def test_select_template_general_fallback():
-    schema = DeckSchema.model_validate(
-        _valid_schema(
-            industry="Tech",
-            confirmed_products=[
-                {
-                    "name": "Standard Display Ad",
-                    "cadence": "monthly",
-                    "price": 10_000.0,
-                    "category": "Digital Media",
-                }
-            ],
-        )
-    )
-    # No franchise keyword match — falls back to industry template
     assert select_template(schema) == "Category_Presentation_Technology.pptx.url"
+
+
