@@ -32,9 +32,7 @@ cp .env.example .env
 | `S3_SNAPSHOT_BUCKET` | S3 bucket (`fortune-sales-mcp-dev-artifacts` for dev) |
 | `ANTHROPIC_API_KEY` | Anthropic API key (local dev only — prod uses Secrets Manager) |
 | `MCP_SHARED_SECRET` | Bearer token for Cowork → MCP auth |
-| `PPTX_BLANK_DECK_KEY` | S3 key for blank Fortune template (default: `templates/blank.pptx`) |
 | `RULEBOOK_KEY` | S3 key for Fortune GTM skill doc (default: `templates/rulebook.docx`) |
-| `RATE_SHEET_KEY` | S3 key for pricing master CSV |
 
 ---
 
@@ -137,17 +135,11 @@ Client-specific text is replaced post-clone via placeholder targeting.
 
 **Schema-driven generation** — deck generation requires a fully hydrated `DeckSchema` (client,
 industry, budget, confirmed products). Prodie enforces sufficiency during conversation; the server
-validates independently via Pydantic. The arc (slide order) is constructed deterministically from
-the confirmed product list — no Claude call needed for structure.
+validates independently via Pydantic and selects the SharePoint template filename from industry,
+franchise keywords, and product names.
 
-**Two-stage MCP surface** — `prepare_deck(schema)` validates the schema and returns the template filename for the AE to
-review. `build_deck(schema, template_url)` assembles and uploads the PPTX. Prodie mediates between stages.
-
-**Generation direction** — Python assembles the deck skeleton (template + corpus product clones).
-Copy writing, apply, render, and visual QA will move to a **Cursor headless agent** inside
-`build_deck` (Stylist v1 — see [`local/stylist-v1/README.md`](local/stylist-v1/README.md)).
-The current v0 interim uses one Opus call + blind placeholder apply; that path is throwaway
-and will be replaced. Do not add Sonnet QA loops or heuristic revision logic.
+**Schema validation MCP tool** — `prepare_deck(schema)` validates the handoff payload and returns
+the template filename for AE review. Deck assembly is a separate follow-on.
 
 **In-memory vector search** — embeddings loaded into numpy at startup, cosine similarity at query
 time. No FAISS index; the corpus (2,404 slides) is small enough that in-memory search is fast and
