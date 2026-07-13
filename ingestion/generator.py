@@ -3,6 +3,7 @@ import json
 import logging
 import os
 import re
+from urllib.parse import urlparse
 from uuid import uuid4
 
 import anthropic
@@ -57,7 +58,9 @@ VOICE RULES — apply to every word you write
 - Address the client directly and specifically. "CrowdStrike's buyers" not "your target audience." \
 "The CISOs Fortune reaches" not "decision makers."
 - Never use: em dashes, "leverage", "synergy", "best-in-class", "cutting-edge", "seamless", \
-"robust", "drive engagement", "unlock", "elevate".\
+"robust", "drive engagement", "unlock", "elevate".
+- Read the full deck structure before writing. Each slide should advance one coherent story arc \
+for this specific client, buyer, and industry — not read as isolated product descriptions.\
 """
 
 
@@ -86,33 +89,9 @@ _WRITE_TOOL: dict = {
     },
 }
 
-_QA_TOOL: dict = {
-    "name": "review_deck_copy",
-    "description": "Report which slides have copy issues. Only flag slides with genuine problems.",
-    "input_schema": {
-        "type": "object",
-        "properties": {
-            "approved": {"type": "boolean"},
-            "failing_slides": {
-                "type": "array",
-                "items": {
-                    "type": "object",
-                    "properties": {
-                        "slide_index": {"type": "integer"},
-                        "issues": {"type": "array", "items": {"type": "string"}},
-                    },
-                    "required": ["slide_index", "issues"],
-                },
-            },
-        },
-        "required": ["approved", "failing_slides"],
-    },
-}
-
-_REVIEW_MODEL = "claude-sonnet-4-6"
-_MAX_REVISIONS = 3
 _TITLE_MAX_CHARS = 80
 _BODY_LINE_MAX_CHARS = 120
+_TEMPLATE_URL_HOST_SUFFIXES = (".sharepoint.com", ".sharepoint.us", ".microsoft.com")
 
 
 class DeckGenerator:
@@ -242,53 +221,31 @@ class DeckGenerator:
                 self._api_key = raw
         return self._api_key
 
-    def _call_claude_review(self, brief: str, slides: list[dict]) -> str:
-        lines = [
-            "You are reviewing a Fortune Media pitch deck before writing copy.",
-            "",
-            "CLIENT BRIEF:",
-            brief,
-            "",
-            f"DECK STRUCTURE ({len(slides)} slides):",
-        ]
-        for s in slides:
-            lines.append(f"\nSlide {s['slide_index'] + 1} [{s['layout_name']}]")
-            if s.get("title"):
-                lines.append(f"  Title: {s['title']}")
-            for i, b in enumerate(s.get("body_text") or [], start=1):
-                lines.append(f"  Body {i}: {b}")
-        lines += [
-            "",
-            "Read the full deck and brief. Write a concise arc brief (200-300 words) covering:",
-            "- The core story arc for this specific client",
-            "- What each slide section needs to accomplish",
-            "- Tone and emphasis for this buyer and industry",
-            "",
-            "This arc brief will guide copy writing for every slide.",
-        ]
-        client = anthropic.Anthropic(api_key=self._get_api_key())
-        response = client.messages.create(
-            model=self._model,
-            max_tokens=1024,
-            messages=[{"role": "user", "content": "\n".join(lines)}],
-        )
-        return response.content[0].text
+    @staticmethod
+    def _validate_template_url(template_url: str) -> None:
+        parsed = urlparse(template_url)
+        if parsed.scheme != "https":
+            raise ValueError("template_url must use HTTPS")
+        host = (parsed.hostname or "").lower()
+        if not host:
+            raise ValueError("template_url must include a host")
+        extra_hosts = {
+            h.strip().lower()
+            for h in os.environ.get("TEMPLATE_URL_ALLOWED_HOSTS", "").split(",")
+            if h.strip()
+        }
+        if host in extra_hosts or any(
+            host.endswith(suffix) for suffix in _TEMPLATE_URL_HOST_SUFFIXES
+        ):
+            return
+        raise ValueError(f"template_url host not allowed: {host}")
 
-    def _call_claude_write(
-        self,
-        brief: str,
-        arc_context: str,
-        slides: list[dict],
-        issues: dict[int, list[str]] | None = None,
-    ) -> list[dict]:
+    def _call_claude_write(self, brief: str, slides: list[dict]) -> list[dict]:
         rulebook = self._load_rulebook()
         system = _VOICE_RULES.format(rulebook_text=rulebook)
         lines = [
             "CLIENT BRIEF:",
             brief,
-            "",
-            "NARRATIVE ARC:",
-            arc_context,
             "",
             f"SLIDES TO REWRITE ({len(slides)} slides):",
         ]
@@ -298,8 +255,6 @@ class DeckGenerator:
                 lines.append(f"  Current title: {s['title']}")
             for i, b in enumerate(s.get("body_text") or [], start=1):
                 lines.append(f"  Current body {i}: {b}")
-            if issues and (slide_issues := issues.get(s["slide_index"])):
-                lines.append(f"  ISSUES TO FIX: {'; '.join(slide_issues)}")
         lines += [
             "",
             "Rewrite every slide using the write_deck_copy tool.",
@@ -317,46 +272,6 @@ class DeckGenerator:
             if block.type == "tool_use" and block.name == "write_deck_copy":
                 return block.input["slides"]
         raise ValueError("Claude did not return deck copy")
-
-    def _call_claude_qa(
-        self, brief: str, slides_content: list[dict], replacements: list[dict]
-    ) -> dict:
-        rep_map = {r["slide_index"]: r for r in replacements}
-        lines = [
-            "You are a senior editor reviewing AI-written copy for a Fortune Media pitch deck.",
-            "",
-            "CLIENT BRIEF:",
-            brief,
-            "",
-            f"GENERATED DECK COPY ({len(slides_content)} slides):",
-        ]
-        for s in slides_content:
-            idx = s["slide_index"]
-            rep = rep_map.get(idx, {})
-            lines.append(f"\nSlide {idx + 1} [{s['layout_name']}]")
-            lines.append(f"  Title: {rep.get('title', '')}")
-            if rep.get("eyebrow"):
-                lines.append(f"  Eyebrow: {rep['eyebrow']}")
-            for b in rep.get("body") or []:
-                lines.append(f"  • {b}")
-        lines += [
-            "",
-            "Flag only slides with genuine problems: narrative gaps, wrong tone for the buyer,",
-            "missing critical product information, or copy that contradicts the brief.",
-            "Set approved=true if the deck is ready to send. Use the review_deck_copy tool.",
-        ]
-        client = anthropic.Anthropic(api_key=self._get_api_key())
-        response = client.messages.create(
-            model=_REVIEW_MODEL,
-            max_tokens=1024,
-            messages=[{"role": "user", "content": "\n".join(lines)}],
-            tools=[_QA_TOOL],
-            tool_choice={"type": "tool", "name": "review_deck_copy"},
-        )
-        for block in response.content:
-            if block.type == "tool_use" and block.name == "review_deck_copy":
-                return block.input
-        raise ValueError("Sonnet QA did not return review output")
 
     @staticmethod
     def _overflow_flags(replacements: list[dict]) -> list[dict]:
@@ -377,6 +292,17 @@ class DeckGenerator:
             if slide_issues:
                 failures.append({"slide_index": r["slide_index"], "issues": slide_issues})
         return failures
+
+    @staticmethod
+    def _raise_on_overflow(replacements: list[dict]) -> None:
+        overflow = DeckGenerator._overflow_flags(replacements)
+        if not overflow:
+            return
+        details = "; ".join(
+            f"slide {f['slide_index'] + 1}: {', '.join(f['issues'])}"
+            for f in overflow
+        )
+        raise ValueError(f"Generated copy exceeds length limits: {details}")
 
     @staticmethod
     def _dedup_shape_ids(slide, output_prs) -> None:
@@ -489,6 +415,8 @@ class DeckGenerator:
         retriever: SlideRetriever instance for corpus search.
         Returns presigned S3 URL valid for 24h.
         """
+        self._validate_template_url(template_url)
+
         # Fetch template
         resp = requests.get(template_url, timeout=30)
         resp.raise_for_status()
@@ -500,13 +428,21 @@ class DeckGenerator:
              if s.slide_layout.name == _PRODUCT_SECTION_LANDMARK),
             None,
         )
+        if landmark_idx is None:
+            raise ValueError(
+                "Template missing product section landmark layout "
+                f"{_PRODUCT_SECTION_LANDMARK!r}"
+            )
         product_indices = [
             i for i, s in enumerate(prs.slides)
-            if landmark_idx is not None
-            and i > landmark_idx
-            and s.slide_layout.name == _PRODUCT_LAYOUT
+            if i > landmark_idx and s.slide_layout.name == _PRODUCT_LAYOUT
         ]
-        insertion_index = product_indices[0] if product_indices else len(prs.slides)
+        if not product_indices:
+            raise ValueError(
+                "Template missing product slides with layout "
+                f"{_PRODUCT_LAYOUT!r} after landmark"
+            )
+        insertion_index = product_indices[0]
 
         # Delete existing product slides back-to-front to preserve indices
         for idx in sorted(product_indices, reverse=True):
@@ -586,27 +522,10 @@ class DeckGenerator:
             brief_lines.append(f"Next steps contact: {schema.next_steps_contact}")
         brief = "\n".join(brief_lines)
 
-        # Claude: arc review → Opus writes all copy → Sonnet QA loop → apply
-        arc_context = self._call_claude_review(brief, slides_content)
-        replacements = self._call_claude_write(brief, arc_context, slides_content)
+        # Claude: one Opus call writes all copy, then deterministic length check
+        replacements = self._call_claude_write(brief, slides_content)
+        self._raise_on_overflow(replacements)
         replacement_map = {r["slide_index"]: r for r in replacements}
-
-        for revision in range(_MAX_REVISIONS):
-            issue_map: dict[int, list[str]] = {}
-            for f in self._overflow_flags(list(replacement_map.values())):
-                issue_map.setdefault(f["slide_index"], []).extend(f["issues"])
-            qa = self._call_claude_qa(brief, slides_content, list(replacement_map.values()))
-            for f in qa["failing_slides"]:
-                issue_map.setdefault(f["slide_index"], []).extend(f["issues"])
-            if not issue_map:
-                break
-            logger.info("QA pass %d: revising %d slide(s)", revision + 1, len(issue_map))
-            failing_slides = [s for s in slides_content if s["slide_index"] in issue_map]
-            revised = self._call_claude_write(
-                brief, arc_context, failing_slides, issues=issue_map
-            )
-            for r in revised:
-                replacement_map[r["slide_index"]] = r
 
         for i, slide in enumerate(prs.slides):
             if i in replacement_map:

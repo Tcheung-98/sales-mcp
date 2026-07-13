@@ -143,6 +143,12 @@ the confirmed product list — no Claude call needed for structure.
 **Two-stage MCP surface** — `prepare_deck(schema)` validates the schema and returns the template filename for the AE to
 review. `build_deck(schema, template_url)` assembles and uploads the PPTX. Prodie mediates between stages.
 
+**Generation direction** — Python assembles the deck skeleton (template + corpus product clones).
+Copy writing, apply, render, and visual QA will move to a **Cursor headless agent** inside
+`build_deck` (Stylist v1 — see [`local/stylist-v1/README.md`](local/stylist-v1/README.md)).
+The current v0 interim uses one Opus call + blind placeholder apply; that path is throwaway
+and will be replaced. Do not add Sonnet QA loops or heuristic revision logic.
+
 **In-memory vector search** — embeddings loaded into numpy at startup, cosine similarity at query
 time. No FAISS index; the corpus (2,404 slides) is small enough that in-memory search is fast and
 removes a dependency.

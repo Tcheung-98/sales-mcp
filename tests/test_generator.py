@@ -6,6 +6,7 @@ from docx import Document
 from pptx import Presentation
 from pptx.util import Inches
 
+from ingestion import generator as generator_module
 from ingestion.generator import DeckGenerator
 from ingestion.schema import DeckSchema, Product
 
@@ -18,6 +19,25 @@ def _blank_bytes(slide_count: int = 1) -> bytes:
     buf = io.BytesIO()
     prs.save(buf)
     return buf.getvalue()
+
+
+def _fortune_template_bytes() -> bytes:
+    """Template with landmark + product slides matching patched layout constants."""
+    prs = Presentation()
+    prs.slides.add_slide(prs.slide_layouts[1])  # landmark
+    prs.slides.add_slide(prs.slide_layouts[5])    # product slide
+    prs.slides.add_slide(prs.slide_layouts[5])    # product slide
+    buf = io.BytesIO()
+    prs.save(buf)
+    return buf.getvalue()
+
+
+@pytest.fixture
+def fortune_template_layouts(monkeypatch):
+    monkeypatch.setattr(
+        generator_module, "_PRODUCT_SECTION_LANDMARK", "Title and Content"
+    )
+    monkeypatch.setattr(generator_module, "_PRODUCT_LAYOUT", "Title Only")
 
 
 def _build_generator() -> DeckGenerator:
@@ -191,40 +211,6 @@ def _fake_slides() -> list[dict]:
     ]
 
 
-def test_call_claude_review_returns_arc_string():
-    generator = _build_generator()
-    generator._api_key = "test-key"
-
-    mock_response = MagicMock()
-    mock_response.content = [MagicMock(text="The arc for Acme is...")]
-
-    with patch("anthropic.Anthropic") as mock_anthropic:
-        mock_anthropic.return_value.messages.create.return_value = mock_response
-        result = generator._call_claude_review("Client: Acme Corp", _fake_slides())
-
-    assert isinstance(result, str)
-    assert "Acme" in result
-    mock_anthropic.return_value.messages.create.assert_called_once()
-
-
-def test_call_claude_review_includes_all_slides_in_prompt():
-    generator = _build_generator()
-    generator._api_key = "test-key"
-
-    mock_response = MagicMock()
-    mock_response.content = [MagicMock(text="arc context")]
-
-    with patch("anthropic.Anthropic") as mock_anthropic:
-        mock_anthropic.return_value.messages.create.return_value = mock_response
-        generator._call_claude_review("brief", _fake_slides())
-
-    call_kwargs = mock_anthropic.return_value.messages.create.call_args
-    prompt = call_kwargs.kwargs["messages"][0]["content"]
-    assert "COVER blue option" in prompt
-    assert "Why Fortune" in prompt
-    assert "Acme Scroller" in prompt
-
-
 def test_call_claude_write_returns_slide_list():
     generator = _build_generator()
     generator._api_key = "test-key"
@@ -249,7 +235,7 @@ def test_call_claude_write_returns_slide_list():
 
     with patch("anthropic.Anthropic") as mock_anthropic:
         mock_anthropic.return_value.messages.create.return_value = mock_response
-        result = generator._call_claude_write("brief", "arc context", _fake_slides())
+        result = generator._call_claude_write("brief", _fake_slides())
 
     assert result == expected
 
@@ -267,7 +253,7 @@ def test_call_claude_write_raises_if_no_tool_use():
     with patch("anthropic.Anthropic") as mock_anthropic:
         mock_anthropic.return_value.messages.create.return_value = mock_response
         with pytest.raises(ValueError, match="did not return deck copy"):
-            generator._call_claude_write("brief", "arc", _fake_slides())
+            generator._call_claude_write("brief", _fake_slides())
 
 
 def _build_schema(**overrides) -> DeckSchema:
@@ -281,16 +267,6 @@ def _build_schema(**overrides) -> DeckSchema:
     )
     defaults.update(overrides)
     return DeckSchema(**defaults)
-
-
-def _template_bytes(slide_count: int = 3) -> bytes:
-    prs = _presentation_with_n_slides(slide_count)
-    buf = io.BytesIO()
-    prs.save(buf)
-    return buf.getvalue()
-
-
-_QA_APPROVED = {"approved": True, "failing_slides": []}
 
 
 def test_overflow_flags_clean():
@@ -314,89 +290,29 @@ def test_overflow_flags_body_line_too_long():
     assert any("body line" in issue for issue in result[0]["issues"])
 
 
-def test_call_claude_qa_approved():
-    generator = _build_generator()
-    generator._api_key = "test-key"
-
-    mock_block = MagicMock()
-    mock_block.type = "tool_use"
-    mock_block.name = "review_deck_copy"
-    mock_block.input = {"approved": True, "failing_slides": []}
-    mock_response = MagicMock()
-    mock_response.content = [mock_block]
-
-    with patch("anthropic.Anthropic") as mock_anthropic:
-        mock_anthropic.return_value.messages.create.return_value = mock_response
-        result = generator._call_claude_qa("brief", _fake_slides(), [
-            {"slide_index": 0, "title": "T", "body": [], "client_name": "Acme"}
-        ])
-
-    assert result["approved"] is True
-    assert result["failing_slides"] == []
+def test_raise_on_overflow_raises():
+    reps = [{"slide_index": 0, "title": "A" * 81, "body": []}]
+    with pytest.raises(ValueError, match="exceeds length limits"):
+        DeckGenerator._raise_on_overflow(reps)
 
 
-def test_call_claude_qa_returns_failures():
-    generator = _build_generator()
-    generator._api_key = "test-key"
-
-    mock_block = MagicMock()
-    mock_block.type = "tool_use"
-    mock_block.name = "review_deck_copy"
-    mock_block.input = {
-        "approved": False,
-        "failing_slides": [{"slide_index": 1, "issues": ["wrong tone for CISO buyer"]}],
-    }
-    mock_response = MagicMock()
-    mock_response.content = [mock_block]
-
-    with patch("anthropic.Anthropic") as mock_anthropic:
-        mock_anthropic.return_value.messages.create.return_value = mock_response
-        result = generator._call_claude_qa("brief", _fake_slides(), [])
-
-    assert result["approved"] is False
-    assert result["failing_slides"][0]["slide_index"] == 1
+def test_validate_template_url_allows_sharepoint():
+    DeckGenerator._validate_template_url(
+        "https://fortune.sharepoint.com/sites/sales/template.pptx"
+    )
 
 
-def test_call_claude_qa_raises_if_no_tool_use():
-    generator = _build_generator()
-    generator._api_key = "test-key"
-
-    mock_block = MagicMock()
-    mock_block.type = "text"
-    mock_response = MagicMock()
-    mock_response.content = [mock_block]
-
-    with patch("anthropic.Anthropic") as mock_anthropic:
-        mock_anthropic.return_value.messages.create.return_value = mock_response
-        with pytest.raises(ValueError, match="Sonnet QA did not return review output"):
-            generator._call_claude_qa("brief", _fake_slides(), [])
+def test_validate_template_url_rejects_http():
+    with pytest.raises(ValueError, match="HTTPS"):
+        DeckGenerator._validate_template_url("http://fortune.sharepoint.com/template.pptx")
 
 
-def test_call_claude_write_includes_issues_in_prompt():
-    generator = _build_generator()
-    generator._api_key = "test-key"
-    generator._rulebook_text = "rules"
-
-    mock_block = MagicMock()
-    mock_block.type = "tool_use"
-    mock_block.name = "write_deck_copy"
-    mock_block.input = {"slides": []}
-    mock_response = MagicMock()
-    mock_response.content = [mock_block]
-
-    with patch("anthropic.Anthropic") as mock_anthropic:
-        mock_anthropic.return_value.messages.create.return_value = mock_response
-        generator._call_claude_write(
-            "brief", "arc", _fake_slides(), issues={1: ["wrong tone for CISO"]}
-        )
-
-    call_kwargs = mock_anthropic.return_value.messages.create.call_args
-    prompt = call_kwargs.kwargs["messages"][0]["content"]
-    assert "ISSUES TO FIX" in prompt
-    assert "wrong tone for CISO" in prompt
+def test_validate_template_url_rejects_unknown_host():
+    with pytest.raises(ValueError, match="host not allowed"):
+        DeckGenerator._validate_template_url("https://evil.example.com/template.pptx")
 
 
-def test_build_happy_path_returns_payload():
+def test_build_happy_path_returns_payload(fortune_template_layouts):
     generator = _build_generator()
     generator._api_key = "test-key"
     generator._rulebook_text = "rules"
@@ -412,17 +328,18 @@ def test_build_happy_path_returns_payload():
 
     with patch("requests.get") as mock_get, \
          patch.object(generator, "_load_pptx", return_value=source_prs), \
-         patch.object(generator, "_call_claude_review", return_value="arc context"), \
          patch.object(generator, "_call_claude_write", return_value=[
              {"slide_index": 0, "title": "T", "body": [], "client_name": "Acme Corp"},
              {"slide_index": 1, "title": "T", "body": [], "client_name": "Acme Corp"},
              {"slide_index": 2, "title": "T", "body": [], "client_name": "Acme Corp"},
-             {"slide_index": 3, "title": "T", "body": [], "client_name": "Acme Corp"},
-         ]), \
-         patch.object(generator, "_call_claude_qa", return_value=_QA_APPROVED):
-        mock_get.return_value.content = _template_bytes(3)
+         ]):
+        mock_get.return_value.content = _fortune_template_bytes()
         mock_get.return_value.raise_for_status = MagicMock()
-        result = generator.build(schema, "https://example.com/template.pptx", mock_retriever)
+        result = generator.build(
+            schema,
+            "https://fortune.sharepoint.com/template.pptx",
+            mock_retriever,
+        )
 
     assert result["download_url"] == "https://s3.example.com/deck.pptx"
     assert result["client_name"] == "Acme Corp"
@@ -431,7 +348,7 @@ def test_build_happy_path_returns_payload():
     generator._s3.put_object.assert_called_once()
 
 
-def test_build_weak_match_raises():
+def test_build_weak_match_raises(fortune_template_layouts):
     generator = _build_generator()
     schema = _build_schema()
     mock_retriever = MagicMock()
@@ -440,19 +357,20 @@ def test_build_weak_match_raises():
     ]
 
     with patch("requests.get") as mock_get:
-        mock_get.return_value.content = _template_bytes()
+        mock_get.return_value.content = _fortune_template_bytes()
         mock_get.return_value.raise_for_status = MagicMock()
         with pytest.raises(ValueError, match="No good corpus match"):
-            generator.build(schema, "https://example.com/template.pptx", mock_retriever)
+            generator.build(
+                schema,
+                "https://fortune.sharepoint.com/template.pptx",
+                mock_retriever,
+            )
 
 
-def test_build_qa_revises_failing_slides():
+def test_build_overflow_raises(fortune_template_layouts):
     generator = _build_generator()
     generator._api_key = "test-key"
     generator._rulebook_text = "rules"
-    generator._s3.put_object.return_value = {}
-    generator._s3.generate_presigned_url.return_value = "https://s3.example.com/deck.pptx"
-
     schema = _build_schema()
     source_prs = _presentation_with_n_slides(1)
     mock_retriever = MagicMock()
@@ -460,31 +378,40 @@ def test_build_qa_revises_failing_slides():
         {"score": 0.9, "source_path": "corpus/deck.pptx", "slide_number": 1}
     ]
 
-    qa_responses = iter([
-        {"approved": False, "failing_slides": [{"slide_index": 1, "issues": ["weak narrative"]}]},
-        _QA_APPROVED,
-    ])
-    _rep = {"title": "T", "body": [], "client_name": "Acme Corp"}
-    write_responses = iter([
-        [{**_rep, "slide_index": i} for i in range(4)],
-        [{"slide_index": 1, "title": "Revised", "body": ["Better copy"], "client_name": "Acme Corp"}],  # noqa: E501
-    ])
-
     with patch("requests.get") as mock_get, \
          patch.object(generator, "_load_pptx", return_value=source_prs), \
-         patch.object(generator, "_call_claude_review", return_value="arc"), \
-         patch.object(generator, "_call_claude_write", side_effect=write_responses) as mock_write, \
-         patch.object(generator, "_call_claude_qa", side_effect=qa_responses) as mock_qa:
-        mock_get.return_value.content = _template_bytes(3)
+         patch.object(generator, "_call_claude_write", return_value=[
+             {"slide_index": 0, "title": "A" * 81, "body": [], "client_name": "Acme Corp"},
+             {"slide_index": 1, "title": "T", "body": [], "client_name": "Acme Corp"},
+             {"slide_index": 2, "title": "T", "body": [], "client_name": "Acme Corp"},
+         ]):
+        mock_get.return_value.content = _fortune_template_bytes()
         mock_get.return_value.raise_for_status = MagicMock()
-        result = generator.build(schema, "https://example.com/template.pptx", mock_retriever)
+        with pytest.raises(ValueError, match="exceeds length limits"):
+            generator.build(
+                schema,
+                "https://fortune.sharepoint.com/template.pptx",
+                mock_retriever,
+            )
 
-    assert result["download_url"] == "https://s3.example.com/deck.pptx"
-    assert mock_write.call_count == 2  # initial + 1 revision
-    assert mock_qa.call_count == 2     # failed + approved
+
+def test_build_missing_landmark_raises():
+    generator = _build_generator()
+    schema = _build_schema()
+    mock_retriever = MagicMock()
+
+    with patch("requests.get") as mock_get:
+        mock_get.return_value.content = _blank_bytes(3)
+        mock_get.return_value.raise_for_status = MagicMock()
+        with pytest.raises(ValueError, match="missing product section landmark"):
+            generator.build(
+                schema,
+                "https://fortune.sharepoint.com/template.pptx",
+                mock_retriever,
+            )
 
 
-def test_build_deletes_and_inserts_correct_slide_count():
+def test_build_deletes_and_inserts_correct_slide_count(fortune_template_layouts):
     generator = _build_generator()
     generator._api_key = "test-key"
     generator._rulebook_text = "rules"
@@ -505,16 +432,17 @@ def test_build_deletes_and_inserts_correct_slide_count():
 
     with patch("requests.get") as mock_get, \
          patch.object(generator, "_load_pptx", return_value=source_prs), \
-         patch.object(generator, "_call_claude_review", return_value="arc"), \
          patch.object(generator, "_call_claude_write", return_value=[
              {"slide_index": i, "title": "T", "body": [], "client_name": "Acme Corp"}
-             for i in range(5)
-         ]), \
-         patch.object(generator, "_call_claude_qa", return_value=_QA_APPROVED):
-        mock_get.return_value.content = _template_bytes(3)
+             for i in range(3)
+         ]):
+        mock_get.return_value.content = _fortune_template_bytes()
         mock_get.return_value.raise_for_status = MagicMock()
-        result = generator.build(schema, "https://example.com/template.pptx", mock_retriever)
+        result = generator.build(
+            schema,
+            "https://fortune.sharepoint.com/template.pptx",
+            mock_retriever,
+        )
 
-    # 3 template slides + 2 product clones = 5
-    assert result["slide_count"] == 5
-
+    # 1 landmark + 2 cloned product slides = 3
+    assert result["slide_count"] == 3

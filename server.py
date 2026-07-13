@@ -10,7 +10,7 @@ from starlette.routing import Route
 
 from ingestion.generator import DeckGenerator
 from ingestion.retriever import SlideRetriever
-from ingestion.schema import DeckSchema, select_template
+from ingestion.schema import BUDGET_ESCALATION_ERROR, DeckSchema, select_template
 
 _EXPECTED_TOKEN = os.environ.get("MCP_SHARED_SECRET")
 
@@ -122,7 +122,7 @@ def prepare_deck(schema: dict) -> dict:
                 missing.append(loc)
             else:
                 errors.append(f"{loc}: {e['msg']}")
-        if any("GTM team" in err for err in errors):
+        if any(e["type"] == BUDGET_ESCALATION_ERROR for e in exc.errors()):
             return {"status": "escalation", "message": errors[0]}
         return {"status": "incomplete", "missing": missing, "errors": errors}
     return {"status": "ok", "template_filename": select_template(parsed)}

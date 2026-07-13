@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pydantic import BaseModel, field_validator
+from pydantic_core import PydanticCustomError
 
 # Cadence and category are validated against fixed lists to catch Prodie typos at handoff.
 # Update these if Fortune adds new cadences or product categories to the rate card.
@@ -16,10 +17,11 @@ _VALID_INDUSTRIES = {
     "Economic Development",
 }
 _ESCALATION_THRESHOLD = 750_000
+BUDGET_ESCALATION_ERROR = "budget_escalation"
 
 # Template filenames in the Fortune Sales Automation SharePoint folder.
-# Industry templates are the default; franchise templates take precedence when a product name
-# matches a known franchise keyword. Fall back to general if no match found.
+# Industry templates are the primary signal; franchise templates are a fallback when no
+# industry template exists. Fall back to general if neither matches.
 # v1: replace these dicts with a config JSON loaded from S3 so GTM can update without a deploy.
 _INDUSTRY_TEMPLATES: dict[str, str] = {
     "Tech": "Category_Presentation_Technology.pptx.url",
@@ -101,10 +103,12 @@ class DeckSchema(BaseModel):
         if v <= 0:
             raise ValueError("budget_quarterly must be greater than zero")
         if v >= _ESCALATION_THRESHOLD:
-            raise ValueError(
-                f"Budget of ${v:,.0f} meets or exceeds the ${_ESCALATION_THRESHOLD:,.0f} "
+            raise PydanticCustomError(
+                BUDGET_ESCALATION_ERROR,
+                "Budget of ${amount:,.0f} meets or exceeds the ${threshold:,.0f} "
                 "quarterly threshold. Route this opportunity to the GTM team — do not "
-                "generate a deck."
+                "generate a deck.",
+                {"amount": v, "threshold": _ESCALATION_THRESHOLD},
             )
         return v
 
