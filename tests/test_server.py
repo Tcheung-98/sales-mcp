@@ -1,6 +1,24 @@
 from unittest.mock import MagicMock
 
-from server import filter_decks_by_tags, get_slide_content, search_decks
+from server import filter_decks_by_tags, get_slide_content, prepare_deck, search_decks
+
+
+def _valid_schema(**overrides) -> dict:
+    base = {
+        "client_name": "Acme Corp",
+        "industry": "Tech",
+        "budget_quarterly": 50_000.0,
+        "confirmed_products": [
+            {
+                "name": "CIO Intelligence Newsletter",
+                "cadence": "monthly",
+                "price": 35_000.0,
+                "category": "Newsletter",
+            }
+        ],
+    }
+    base.update(overrides)
+    return base
 
 
 def test_search_decks_delegates_to_retriever(mocker):
@@ -32,6 +50,26 @@ def test_get_slide_content_no_slide_numbers(mocker):
     mocker.patch("server._get_retriever", return_value=mock_retriever)
     get_slide_content(deck_id="d1")
     mock_retriever.get_slide_content.assert_called_once_with("d1", None)
+
+
+def test_prepare_deck_valid_returns_template_filename():
+    result = prepare_deck(schema=_valid_schema())
+    assert result["status"] == "ok"
+    assert "template_filename" in result
+    assert result["template_filename"].endswith(".pptx.url")
+
+
+def test_prepare_deck_missing_fields_returns_incomplete():
+    result = prepare_deck(schema={"client_name": "Acme Corp"})
+    assert result["status"] == "incomplete"
+    assert "industry" in result["missing"]
+    assert "budget_quarterly" in result["missing"]
+
+
+def test_prepare_deck_escalation_budget():
+    result = prepare_deck(schema=_valid_schema(budget_quarterly=750_000))
+    assert result["status"] == "escalation"
+    assert "GTM" in result["message"]
 
 
 def test_filter_decks_by_tags_delegates_to_retriever(mocker):

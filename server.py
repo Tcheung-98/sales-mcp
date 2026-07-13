@@ -2,11 +2,13 @@ import os
 
 from mcp.server.fastmcp import FastMCP
 from mcp.server.fastmcp.server import TransportSecuritySettings
+from pydantic import ValidationError
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import JSONResponse
 from starlette.routing import Route
 
 from ingestion.retriever import SlideRetriever
+from ingestion.schema import BUDGET_ESCALATION_ERROR, DeckSchema, select_template
 
 _EXPECTED_TOKEN = os.environ.get("MCP_SHARED_SECRET")
 
@@ -88,6 +90,31 @@ def get_slide_content(deck_id: str, slide_numbers: list[int] | None = None) -> l
     requested slide numbers don't exist — never raises an error.
     """
     return _get_retriever().get_slide_content(deck_id, slide_numbers)
+
+
+@mcp.tool()
+def prepare_deck(schema: dict) -> dict:
+    """
+    Validate a deck schema and return the SharePoint template filename for AE review.
+    Returns status 'ok' with template_filename if valid, 'incomplete' with missing
+    fields if not, or 'escalation' if the budget meets the GTM threshold. Prodie
+    should fetch template_filename from the Fortune Sales Automation SharePoint folder.
+    """
+    try:
+        parsed = DeckSchema.model_validate(schema)
+    except ValidationError as exc:
+        missing = []
+        errors = []
+        for e in exc.errors():
+            loc = ".".join(str(p) for p in e["loc"])
+            if e["type"] == "missing":
+                missing.append(loc)
+            else:
+                errors.append(f"{loc}: {e['msg']}")
+        if any(e["type"] == BUDGET_ESCALATION_ERROR for e in exc.errors()):
+            return {"status": "escalation", "message": errors[0]}
+        return {"status": "incomplete", "missing": missing, "errors": errors}
+    return {"status": "ok", "template_filename": select_template(parsed)}
 
 
 async def health(request):
