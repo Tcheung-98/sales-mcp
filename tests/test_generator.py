@@ -2,11 +2,14 @@ import io
 from unittest.mock import MagicMock, patch
 
 import anthropic
+import pytest
 from docx import Document
 from pptx import Presentation
 from pptx.util import Inches
 
+from ingestion import generator as generator_module
 from ingestion.generator import DeckGenerator
+from ingestion.schema import DeckSchema, Product
 
 
 def _blank_bytes(slide_count: int = 1) -> bytes:
@@ -19,12 +22,56 @@ def _blank_bytes(slide_count: int = 1) -> bytes:
     return buf.getvalue()
 
 
+def _fortune_template_bytes() -> bytes:
+    """Template with landmark + product slides matching patched layout constants."""
+    prs = Presentation()
+    prs.slides.add_slide(prs.slide_layouts[1])  # landmark
+    prs.slides.add_slide(prs.slide_layouts[5])  # product slide
+    prs.slides.add_slide(prs.slide_layouts[5])  # product slide
+    buf = io.BytesIO()
+    prs.save(buf)
+    return buf.getvalue()
+
+
+@pytest.fixture
+def fortune_template_layouts(monkeypatch):
+    monkeypatch.setattr(
+        generator_module, "_PRODUCT_SECTION_LANDMARK", "Title and Content"
+    )
+    monkeypatch.setattr(generator_module, "_PRODUCT_LAYOUT", "Title Only")
+
+
+def _presentation_with_n_slides(n: int) -> Presentation:
+    prs = Presentation()
+    for _ in range(n):
+        prs.slides.add_slide(prs.slide_layouts[1])
+    return prs
+
+
 def _build_generator() -> DeckGenerator:
     with patch("boto3.client", return_value=MagicMock()):
         generator = DeckGenerator(bucket="test-bucket")
     generator._s3 = MagicMock()
     generator._blank_bytes = _blank_bytes(slide_count=6)
     return generator
+
+
+def _build_schema(**overrides) -> DeckSchema:
+    defaults = dict(
+        client_name="Acme Corp",
+        industry="Tech",
+        budget_quarterly=100_000,
+        confirmed_products=[
+            Product(
+                name="Fortune 500 List",
+                cadence="annual",
+                price=50_000,
+                category="Newsletter",
+            )
+        ],
+    )
+    defaults.update(overrides)
+    return DeckSchema(**defaults)
 
 
 def _slide_with_textbox(text: str):
@@ -249,3 +296,166 @@ def test_call_claude_context_includes_full_coordinates():
     assert "slide: 7" in user_msg
     assert "corpus/Fortune_500_2025.pptx" in user_msg
     assert "slide: 3" in user_msg
+
+
+def test_delete_slide_removes_slide():
+    prs = _presentation_with_n_slides(3)
+    DeckGenerator._delete_slide(prs, 1)
+    assert len(prs.slides) == 2
+
+
+def test_delete_slide_correct_slide_removed():
+    prs = _presentation_with_n_slides(3)
+    titles = ["A", "B", "C"]
+    for slide, title in zip(prs.slides, titles):
+        slide.shapes.title.text = title
+    DeckGenerator._delete_slide(prs, 1)
+    remaining = [s.shapes.title.text for s in prs.slides]
+    assert remaining == ["A", "C"]
+
+
+def test_insert_slide_at_moves_to_position():
+    prs = _presentation_with_n_slides(3)
+    titles = ["A", "B", "C"]
+    for slide, title in zip(prs.slides, titles):
+        slide.shapes.title.text = title
+    source_prs = _presentation_with_n_slides(1)
+    source_prs.slides[0].shapes.title.text = "NEW"
+    DeckGenerator._clone_slide(source_prs, 0, prs)
+    DeckGenerator._insert_slide_at(prs, 1)
+    assert len(prs.slides) == 4
+    assert prs.slides[1].shapes.title.text == "NEW"
+    assert prs.slides[0].shapes.title.text == "A"
+    assert prs.slides[2].shapes.title.text == "B"
+
+
+def test_validate_template_url_allows_sharepoint():
+    DeckGenerator._validate_template_url(
+        "https://fortune.sharepoint.com/sites/sales/template.pptx"
+    )
+
+
+def test_validate_template_url_rejects_http():
+    with pytest.raises(ValueError, match="HTTPS"):
+        DeckGenerator._validate_template_url(
+            "http://fortune.sharepoint.com/template.pptx"
+        )
+
+
+def test_validate_template_url_rejects_unknown_host():
+    with pytest.raises(ValueError, match="host not allowed"):
+        DeckGenerator._validate_template_url("https://evil.example.com/template.pptx")
+
+
+def test_validate_template_url_allows_extra_host(monkeypatch):
+    monkeypatch.setenv("TEMPLATE_URL_ALLOWED_HOSTS", "cdn.example.com")
+    DeckGenerator._validate_template_url("https://cdn.example.com/template.pptx")
+
+
+def test_build_happy_path_returns_payload(fortune_template_layouts):
+    generator = _build_generator()
+    generator._s3.put_object.return_value = {}
+    generator._s3.generate_presigned_url.return_value = "https://s3.example.com/deck.pptx"
+
+    schema = _build_schema()
+    source_prs = _presentation_with_n_slides(1)
+    mock_retriever = MagicMock()
+    mock_retriever.search.return_value = [
+        {"score": 0.85, "source_path": "corpus/deck.pptx", "slide_number": 1}
+    ]
+
+    with (
+        patch("requests.get") as mock_get,
+        patch.object(generator, "_load_pptx", return_value=source_prs),
+    ):
+        mock_get.return_value.content = _fortune_template_bytes()
+        mock_get.return_value.raise_for_status = MagicMock()
+        result = generator.build(
+            schema,
+            "https://fortune.sharepoint.com/template.pptx",
+            mock_retriever,
+        )
+
+    assert result["download_url"] == "https://s3.example.com/deck.pptx"
+    assert result["client_name"] == "Acme Corp"
+    assert result["template_key"] == "template.pptx"
+    assert "slide_count" in result
+    generator._s3.put_object.assert_called_once()
+    put_kwargs = generator._s3.put_object.call_args.kwargs
+    assert put_kwargs["Key"].startswith("generated/")
+    assert put_kwargs["Key"].endswith(".pptx")
+
+
+def test_build_weak_match_raises(fortune_template_layouts):
+    generator = _build_generator()
+    schema = _build_schema()
+    mock_retriever = MagicMock()
+    mock_retriever.search.return_value = [
+        {"score": 0.3, "source_path": "corpus/deck.pptx", "slide_number": 1}
+    ]
+
+    with patch("requests.get") as mock_get:
+        mock_get.return_value.content = _fortune_template_bytes()
+        mock_get.return_value.raise_for_status = MagicMock()
+        with pytest.raises(ValueError, match="No good corpus match"):
+            generator.build(
+                schema,
+                "https://fortune.sharepoint.com/template.pptx",
+                mock_retriever,
+            )
+
+
+def test_build_missing_landmark_raises():
+    generator = _build_generator()
+    schema = _build_schema()
+    mock_retriever = MagicMock()
+
+    with patch("requests.get") as mock_get:
+        mock_get.return_value.content = _blank_bytes(3)
+        mock_get.return_value.raise_for_status = MagicMock()
+        with pytest.raises(ValueError, match="missing product section landmark"):
+            generator.build(
+                schema,
+                "https://fortune.sharepoint.com/template.pptx",
+                mock_retriever,
+            )
+
+
+def test_build_deletes_and_inserts_correct_slide_count(fortune_template_layouts):
+    generator = _build_generator()
+    generator._s3.put_object.return_value = {}
+    generator._s3.generate_presigned_url.return_value = "https://s3.example.com/deck.pptx"
+
+    schema = _build_schema(
+        confirmed_products=[
+            Product(
+                name="Product A", cadence="annual", price=10_000, category="Newsletter"
+            ),
+            Product(
+                name="Product B",
+                cadence="monthly",
+                price=5_000,
+                category="Digital Media",
+            ),
+        ]
+    )
+    source_prs = _presentation_with_n_slides(1)
+    mock_retriever = MagicMock()
+    mock_retriever.search.return_value = [
+        {"score": 0.9, "source_path": "corpus/deck.pptx", "slide_number": 1}
+    ]
+
+    with (
+        patch("requests.get") as mock_get,
+        patch.object(generator, "_load_pptx", return_value=source_prs),
+    ):
+        mock_get.return_value.content = _fortune_template_bytes()
+        mock_get.return_value.raise_for_status = MagicMock()
+        result = generator.build(
+            schema,
+            "https://fortune.sharepoint.com/template.pptx",
+            mock_retriever,
+        )
+
+    # 1 landmark + 2 cloned product slides = 3
+    assert result["slide_count"] == 3

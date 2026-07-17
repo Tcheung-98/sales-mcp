@@ -1,6 +1,12 @@
 from unittest.mock import MagicMock
 
-from server import filter_decks_by_tags, get_slide_content, prepare_deck, search_decks
+from server import (
+    build_deck,
+    filter_decks_by_tags,
+    get_slide_content,
+    prepare_deck,
+    search_decks,
+)
 
 
 def _valid_schema(**overrides) -> dict:
@@ -70,6 +76,57 @@ def test_prepare_deck_escalation_budget():
     result = prepare_deck(schema=_valid_schema(budget_quarterly=750_000))
     assert result["status"] == "escalation"
     assert "GTM" in result["message"]
+
+
+def test_build_deck_delegates_to_generator(mocker):
+    fake_result = {
+        "download_url": "https://example.com/test.pptx",
+        "slide_count": 25,
+        "client_name": "Acme Corp",
+        "template_key": "template.pptx",
+    }
+    mock_generator = MagicMock()
+    mock_generator.build.return_value = fake_result
+    mock_retriever = MagicMock()
+    mocker.patch("server._get_generator", return_value=mock_generator)
+    mocker.patch("server._get_retriever", return_value=mock_retriever)
+    result = build_deck(
+        schema=_valid_schema(),
+        template_url="https://fortune.sharepoint.com/template.pptx",
+    )
+    mock_generator.build.assert_called_once()
+    assert result == fake_result
+
+
+def test_build_deck_escalation_budget():
+    result = build_deck(
+        schema=_valid_schema(budget_quarterly=750_000),
+        template_url="https://fortune.sharepoint.com/template.pptx",
+    )
+    assert result["status"] == "escalation"
+    assert "GTM" in result["message"]
+
+
+def test_build_deck_incomplete_schema():
+    result = build_deck(
+        schema={"client_name": "Acme Corp"},
+        template_url="https://fortune.sharepoint.com/template.pptx",
+    )
+    assert result["status"] == "incomplete"
+    assert "industry" in result["missing"]
+
+
+def test_build_deck_assembly_error(mocker):
+    mock_generator = MagicMock()
+    mock_generator.build.side_effect = ValueError("host not allowed")
+    mocker.patch("server._get_generator", return_value=mock_generator)
+    mocker.patch("server._get_retriever", return_value=MagicMock())
+    result = build_deck(
+        schema=_valid_schema(),
+        template_url="https://evil.example.com/template.pptx",
+    )
+    assert result["status"] == "error"
+    assert "host not allowed" in result["message"]
 
 
 def test_filter_decks_by_tags_delegates_to_retriever(mocker):

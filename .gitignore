@@ -38,3 +38,6 @@ build/
 
 # Internal
 _internal/
+
+# Local session notes, plans, and epic context (not for commit)
+local/
