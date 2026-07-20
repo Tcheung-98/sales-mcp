@@ -9,6 +9,7 @@ from pptx.util import Inches
 
 from ingestion import generator as generator_module
 from ingestion.generator import DeckGenerator
+from ingestion.pptx_tools import apply_replacements
 from ingestion.schema import DeckSchema, Product
 
 
@@ -85,7 +86,7 @@ def _slide_with_textbox(text: str):
 
 def test_apply_replacements_swaps_client_name():
     slide = _slide_with_textbox("your brand reaches millions")
-    DeckGenerator._apply_replacements(slide, {"client_name": "Acme Corp"})
+    apply_replacements(slide, {"client_name": "Acme Corp"})
     texts = [
         run.text
         for sh in slide.shapes if sh.has_text_frame
@@ -98,7 +99,7 @@ def test_apply_replacements_swaps_client_name():
 
 def test_apply_replacements_case_insensitive():
     slide = _slide_with_textbox("YOUR COMPANY is the leader")
-    DeckGenerator._apply_replacements(slide, {"client_name": "Acme Corp"})
+    apply_replacements(slide, {"client_name": "Acme Corp"})
     texts = [
         run.text
         for sh in slide.shapes if sh.has_text_frame
@@ -112,13 +113,13 @@ def test_apply_replacements_title_overwrites_placeholder():
     prs = Presentation()
     slide = prs.slides.add_slide(prs.slide_layouts[1])  # Title, Content
     slide.shapes.title.text = "Old Title"
-    DeckGenerator._apply_replacements(slide, {"title": "New Title"})
+    apply_replacements(slide, {"title": "New Title"})
     assert slide.shapes.title.text == "New Title"
 
 
 def test_apply_replacements_leaves_unmatched_text_alone():
     slide = _slide_with_textbox("Fortune reaches 42 million people")
-    DeckGenerator._apply_replacements(slide, {"client_name": "Acme Corp"})
+    apply_replacements(slide, {"client_name": "Acme Corp"})
     texts = [
         run.text
         for sh in slide.shapes if sh.has_text_frame
@@ -130,7 +131,7 @@ def test_apply_replacements_leaves_unmatched_text_alone():
 
 def test_apply_replacements_noop_on_empty_dict():
     slide = _slide_with_textbox("your brand")
-    DeckGenerator._apply_replacements(slide, {})
+    apply_replacements(slide, {})
     texts = [
         run.text
         for sh in slide.shapes if sh.has_text_frame
@@ -459,3 +460,53 @@ def test_build_deletes_and_inserts_correct_slide_count(fortune_template_layouts)
 
     # 1 landmark + 2 cloned product slides = 3
     assert result["slide_count"] == 3
+
+
+def test_assemble_skeleton_returns_presentation_without_s3(fortune_template_layouts):
+    """Seam for Cursor: assemble only — no Anthropic, no upload."""
+    generator = _build_generator()
+    schema = _build_schema()
+    source_prs = _presentation_with_n_slides(1)
+    mock_retriever = MagicMock()
+    mock_retriever.search.return_value = [
+        {"score": 0.85, "source_path": "corpus/deck.pptx", "slide_number": 1}
+    ]
+
+    with (
+        patch("requests.get") as mock_get,
+        patch.object(generator, "_load_pptx", return_value=source_prs),
+        patch("anthropic.Anthropic") as mock_anthropic,
+    ):
+        mock_get.return_value.content = _fortune_template_bytes()
+        mock_get.return_value.raise_for_status = MagicMock()
+        prs = generator.assemble_skeleton(
+            schema,
+            "https://fortune.sharepoint.com/template.pptx",
+            mock_retriever,
+        )
+
+    assert len(prs.slides) == 2
+    assert hasattr(prs, "slides")
+    generator._s3.put_object.assert_not_called()
+    generator._s3.generate_presigned_url.assert_not_called()
+    mock_anthropic.assert_not_called()
+
+
+def test_build_delegates_to_assemble_skeleton(fortune_template_layouts):
+    generator = _build_generator()
+    generator._s3.put_object.return_value = {}
+    generator._s3.generate_presigned_url.return_value = "https://s3.example.com/deck.pptx"
+    schema = _build_schema()
+    mock_prs = _presentation_with_n_slides(2)
+
+    with patch.object(generator, "assemble_skeleton", return_value=mock_prs) as mock_assemble:
+        result = generator.build(
+            schema,
+            "https://fortune.sharepoint.com/template.pptx",
+            MagicMock(),
+        )
+
+    mock_assemble.assert_called_once()
+    assert result["slide_count"] == 2
+    assert result["download_url"] == "https://s3.example.com/deck.pptx"
+    generator._s3.put_object.assert_called_once()

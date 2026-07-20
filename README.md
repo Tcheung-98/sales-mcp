@@ -142,8 +142,9 @@ franchise keywords, and product names.
 **Schema validation + skeleton assembly** — `prepare_deck(schema)` validates the handoff payload
 and returns the template filename for AE review. `build_deck(schema, template_url)` fetches the
 SharePoint template, swaps product placeholders with corpus clones, and returns a presigned PPTX
-URL. Skeleton only for now — no LLM copy writing or Cursor stylist pass (those land later inside
-`build_deck`).
+URL. Clone lives in `DeckGenerator.assemble_skeleton` (Anthropic-free); apply helpers live in
+`ingestion/pptx_tools.py` for the future Cursor stylist. Skeleton only for now — no LLM copy or
+stylist pass yet.
 
 **In-memory vector search** — embeddings loaded into numpy at startup, cosine similarity at query
 time. No FAISS index; the corpus (2,404 slides) is small enough that in-memory search is fast and
