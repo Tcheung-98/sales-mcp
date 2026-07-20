@@ -8,11 +8,12 @@ RUN pip install --no-cache-dir uv
 # Copy dep files first for Docker layer caching
 COPY pyproject.toml uv.lock* ./
 
-# Install dependencies (production only)
-RUN uv sync --frozen --no-dev
+# Install third-party deps only (project needs server.py / ingestion, copied next)
+RUN uv sync --frozen --no-dev --no-install-project
 
-# Copy application code
+# Copy application code, then install the local package
 COPY . .
+RUN uv sync --frozen --no-dev
 
 # FastMCP SSE listens here
 EXPOSE 8000
