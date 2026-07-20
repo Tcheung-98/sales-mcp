@@ -15,9 +15,12 @@ jobs:
           if [ "${{ github.ref_name }}" == "main" ]; then
             echo "LIGHTSAIL_SERVICE=fortune-sales-mcp" >> "$GITHUB_ENV"
             echo "MCP_SHARED_SECRET=${{ secrets.PROD_MCP_SHARED_SECRET }}" >> "$GITHUB_ENV"
+            # Prod artifacts bucket is empty; use the populated dev bucket until synced.
+            echo "S3_SNAPSHOT_BUCKET=fortune-sales-mcp-dev-artifacts" >> "$GITHUB_ENV"
           else
             echo "LIGHTSAIL_SERVICE=fortune-sales-mcp-dev" >> "$GITHUB_ENV"
             echo "MCP_SHARED_SECRET=${{ secrets.DEV_MCP_SHARED_SECRET }}" >> "$GITHUB_ENV"
+            echo "S3_SNAPSHOT_BUCKET=fortune-sales-mcp-dev-artifacts" >> "$GITHUB_ENV"
           fi
 
       - name: Configure AWS credentials
@@ -66,7 +69,8 @@ jobs:
                 "MCP_SHARED_SECRET": "$MCP_SHARED_SECRET",
                 "AWS_ACCESS_KEY_ID": "$RUNTIME_AWS_ACCESS_KEY_ID",
                 "AWS_SECRET_ACCESS_KEY": "$RUNTIME_AWS_SECRET_ACCESS_KEY",
-                "AWS_DEFAULT_REGION": "us-east-1"
+                "AWS_DEFAULT_REGION": "us-east-1",
+                "S3_SNAPSHOT_BUCKET": "$S3_SNAPSHOT_BUCKET"
               },
               "ports": {
                 "8000": "HTTP"
