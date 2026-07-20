@@ -33,6 +33,7 @@ cp .env.example .env
 | `ANTHROPIC_API_KEY` | Anthropic API key (local dev only — prod uses Secrets Manager) |
 | `MCP_SHARED_SECRET` | Bearer token for Cowork → MCP auth |
 | `RULEBOOK_KEY` | S3 key for Fortune GTM skill doc (default: `templates/rulebook.docx`) |
+| `TEMPLATE_URL_ALLOWED_HOSTS` | Optional extra hosts for `build_deck` template URLs (comma-separated) |
 
 ---
 
@@ -138,8 +139,11 @@ industry, budget, confirmed products). Prodie enforces sufficiency during conver
 validates independently via Pydantic and selects the SharePoint template filename from industry,
 franchise keywords, and product names.
 
-**Schema validation MCP tool** — `prepare_deck(schema)` validates the handoff payload and returns
-the template filename for AE review. Deck assembly is a separate follow-on.
+**Schema validation + skeleton assembly** — `prepare_deck(schema)` validates the handoff payload
+and returns the template filename for AE review. `build_deck(schema, template_url)` fetches the
+SharePoint template, swaps product placeholders with corpus clones, and returns a presigned PPTX
+URL. Skeleton only for now — no LLM copy writing or Cursor stylist pass (those land later inside
+`build_deck`).
 
 **In-memory vector search** — embeddings loaded into numpy at startup, cosine similarity at query
 time. No FAISS index; the corpus (2,404 slides) is small enough that in-memory search is fast and

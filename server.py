@@ -1,5 +1,6 @@
 import os
 
+import requests
 from mcp.server.fastmcp import FastMCP
 from mcp.server.fastmcp.server import TransportSecuritySettings
 from pydantic import ValidationError
@@ -7,6 +8,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import JSONResponse
 from starlette.routing import Route
 
+from ingestion.generator import DeckGenerator
 from ingestion.retriever import SlideRetriever
 from ingestion.schema import BUDGET_ESCALATION_ERROR, DeckSchema, select_template
 
@@ -31,6 +33,7 @@ mcp = FastMCP(
 )
 
 _retriever: SlideRetriever | None = None
+_generator: DeckGenerator | None = None
 
 
 def _get_retriever() -> SlideRetriever:
@@ -38,6 +41,13 @@ def _get_retriever() -> SlideRetriever:
     if _retriever is None:
         _retriever = SlideRetriever()
     return _retriever
+
+
+def _get_generator() -> DeckGenerator:
+    global _generator
+    if _generator is None:
+        _generator = DeckGenerator()
+    return _generator
 
 
 @mcp.tool()
@@ -96,9 +106,10 @@ def get_slide_content(deck_id: str, slide_numbers: list[int] | None = None) -> l
 def prepare_deck(schema: dict) -> dict:
     """
     Validate a deck schema and return the SharePoint template filename for AE review.
-    Returns status 'ok' with template_filename if valid, 'incomplete' with missing
-    fields if not, or 'escalation' if the budget meets the GTM threshold. Prodie
-    should fetch template_filename from the Fortune Sales Automation SharePoint folder.
+    Call this before build_deck. Returns status 'ok' with template_filename if valid,
+    'incomplete' with missing fields if not, or 'escalation' if the budget meets the
+    GTM threshold. Prodie should fetch template_filename from the Fortune Sales
+    Automation SharePoint folder and pass its URL to build_deck.
     """
     try:
         parsed = DeckSchema.model_validate(schema)
@@ -115,6 +126,38 @@ def prepare_deck(schema: dict) -> dict:
             return {"status": "escalation", "message": errors[0]}
         return {"status": "incomplete", "missing": missing, "errors": errors}
     return {"status": "ok", "template_filename": select_template(parsed)}
+
+
+@mcp.tool()
+def build_deck(schema: dict, template_url: str) -> dict:
+    """
+    Assemble a skeleton Fortune pitch deck from a confirmed schema and template URL.
+    template_url: pre-authenticated HTTPS download URL for the .pptx template,
+    resolved by Prodie from the Fortune Sales Automation SharePoint folder.
+    Keeps narrative slides from the template, replaces product placeholders with
+    best corpus matches, uploads to S3, and returns a presigned download URL
+    valid for 24h. Skeleton only — no LLM copy writing or stylist pass.
+    """
+    try:
+        parsed = DeckSchema.model_validate(schema)
+    except ValidationError as exc:
+        missing = []
+        errors = []
+        for e in exc.errors():
+            loc = ".".join(str(p) for p in e["loc"])
+            if e["type"] == "missing":
+                missing.append(loc)
+            else:
+                errors.append(f"{loc}: {e['msg']}")
+        if any(e["type"] == BUDGET_ESCALATION_ERROR for e in exc.errors()):
+            return {"status": "escalation", "message": errors[0]}
+        return {"status": "incomplete", "missing": missing, "errors": errors}
+    try:
+        return _get_generator().build(parsed, template_url, _get_retriever())
+    except ValueError as exc:
+        return {"status": "error", "message": str(exc)}
+    except requests.RequestException as exc:
+        return {"status": "error", "message": f"Failed to fetch template: {exc}"}
 
 
 async def health(request):

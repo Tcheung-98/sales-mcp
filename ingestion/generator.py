@@ -4,9 +4,12 @@ import json
 import logging
 import os
 import re
+from urllib.parse import urlparse
+from uuid import uuid4
 
 import anthropic
 import boto3
+import requests
 from docx import Document
 from lxml import etree
 from pptx import Presentation
@@ -15,6 +18,8 @@ from pptx.oxml import parse_xml
 from pptx.oxml.ns import qn
 from pptx.presentation import Presentation as PresentationType
 from pypdf import PdfReader
+
+from ingestion.schema import DeckSchema
 
 logger = logging.getLogger(__name__)
 
@@ -29,6 +34,12 @@ _CLIENT_NAME_PLACEHOLDERS = re.compile(
     r"your brand|your company|client name|your organization",
     re.IGNORECASE,
 )
+
+# GTM template layout names — product placeholders sit after the capsule landmark.
+_WEAK_MATCH_THRESHOLD = 0.5
+_PRODUCT_SECTION_LANDMARK = "2_DARK BLUE/ BRIGHT BLUE CAPSULE"
+_PRODUCT_LAYOUT = "11_Title Only"
+_TEMPLATE_URL_HOST_SUFFIXES = (".sharepoint.com", ".sharepoint.us", ".microsoft.com")
 
 
 _SYSTEM_PROMPT_TEMPLATE = """\
@@ -168,6 +179,41 @@ class DeckGenerator:
         new_slide.part.relate_to(target_layout.part, RT.SLIDE_LAYOUT)
 
         return new_slide
+
+    @staticmethod
+    def _delete_slide(prs: PresentationType, slide_idx: int) -> None:
+        sld_id_lst = prs.slides._sldIdLst
+        sld_id = sld_id_lst[slide_idx]
+        r_id = sld_id.get(qn("r:id"))
+        prs.part.drop_rel(r_id)
+        sld_id_lst.remove(sld_id)
+
+    @staticmethod
+    def _insert_slide_at(prs: PresentationType, position: int) -> None:
+        # _clone_slide always appends; move the last sldId to the target position
+        sld_id_lst = prs.slides._sldIdLst
+        sld_id = sld_id_lst[-1]
+        sld_id_lst.remove(sld_id)
+        sld_id_lst.insert(position, sld_id)
+
+    @staticmethod
+    def _validate_template_url(template_url: str) -> None:
+        parsed = urlparse(template_url)
+        if parsed.scheme != "https":
+            raise ValueError("template_url must use HTTPS")
+        host = (parsed.hostname or "").lower()
+        if not host:
+            raise ValueError("template_url must include a host")
+        extra_hosts = {
+            h.strip().lower()
+            for h in os.environ.get("TEMPLATE_URL_ALLOWED_HOSTS", "").split(",")
+            if h.strip()
+        }
+        if host in extra_hosts or any(
+            host.endswith(suffix) for suffix in _TEMPLATE_URL_HOST_SUFFIXES
+        ):
+            return
+        raise ValueError(f"template_url host not allowed: {host}")
 
     def _load_pptx(self, s3_key: str) -> PresentationType:
         if s3_key not in self._pptx_cache:
@@ -456,4 +502,87 @@ class DeckGenerator:
         buf = io.BytesIO()
         output_prs.save(buf)
         return buf.getvalue()
+
+    def build(self, schema: DeckSchema, template_url: str, retriever) -> dict:
+        """Assemble a skeleton PPTX: template narrative + corpus product clones.
+
+        No LLM copy writing. template_url is a pre-authenticated SharePoint download
+        URL resolved by Prodie. Returns a presigned S3 URL valid for 24h.
+        """
+        self._validate_template_url(template_url)
+
+        resp = requests.get(template_url, timeout=30)
+        resp.raise_for_status()
+        prs = Presentation(io.BytesIO(resp.content))
+
+        # Product placeholders: 11_Title Only layouts after the capsule landmark
+        landmark_idx = next(
+            (
+                i
+                for i, s in enumerate(prs.slides)
+                if s.slide_layout.name == _PRODUCT_SECTION_LANDMARK
+            ),
+            None,
+        )
+        if landmark_idx is None:
+            raise ValueError(
+                "Template missing product section landmark layout "
+                f"{_PRODUCT_SECTION_LANDMARK!r}"
+            )
+        product_indices = [
+            i
+            for i, s in enumerate(prs.slides)
+            if i > landmark_idx and s.slide_layout.name == _PRODUCT_LAYOUT
+        ]
+        if not product_indices:
+            raise ValueError(
+                "Template missing product slides with layout "
+                f"{_PRODUCT_LAYOUT!r} after landmark"
+            )
+        insertion_index = product_indices[0]
+
+        # Delete existing product slides back-to-front to preserve indices
+        for idx in sorted(product_indices, reverse=True):
+            self._delete_slide(prs, idx)
+
+        failures = []
+        best_candidates = []
+        for product in schema.confirmed_products:
+            candidates = retriever.search(product.name, k=8)
+            best_score = max((c["score"] for c in candidates), default=0.0)
+            if best_score < _WEAK_MATCH_THRESHOLD:
+                failures.append({"product": product.name, "best_score": best_score})
+            else:
+                best_candidates.append(max(candidates, key=lambda c: c["score"]))
+
+        if failures:
+            raise ValueError(
+                "No good corpus match for: "
+                + ", ".join(
+                    f"{f['product']} (score {f['best_score']:.2f})" for f in failures
+                )
+            )
+
+        for i, best in enumerate(best_candidates):
+            source_prs = self._load_pptx(best["source_path"])
+            new_slide = self._clone_slide(source_prs, best["slide_number"] - 1, prs)
+            self._insert_slide_at(prs, insertion_index + i)
+            self._dedup_shape_ids(new_slide, prs)
+
+        buf = io.BytesIO()
+        prs.save(buf)
+        key = f"generated/{uuid4()}.pptx"
+        self._s3.put_object(Bucket=self._bucket, Key=key, Body=buf.getvalue())
+        url = self._s3.generate_presigned_url(
+            "get_object",
+            Params={"Bucket": self._bucket, "Key": key},
+            ExpiresIn=86400,
+        )
+        logger.info("skeleton deck uploaded to s3://%s/%s", self._bucket, key)
+        return {
+            "download_url": url,
+            "slide_count": len(prs.slides),
+            "client_name": schema.client_name,
+            "template_key": template_url.split("?")[0].rstrip("/").split("/")[-1],
+        }
 
