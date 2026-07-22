@@ -2,6 +2,16 @@ FROM python:3.12-slim
 
 WORKDIR /app
 
+# LibreOffice headless: PPTX → PDF for vision QA (B1 render_slides).
+# poppler-utils: PDF pages → PNG. fonts: avoid blank/missing glyphs in renders.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libreoffice-impress \
+    fonts-liberation \
+    fonts-dejavu-core \
+    fontconfig \
+    poppler-utils \
+    && rm -rf /var/lib/apt/lists/*
+
 # Install uv for dependency management
 RUN pip install --no-cache-dir uv
 
