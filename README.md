@@ -146,6 +146,25 @@ URL. Clone lives in `DeckGenerator.assemble_skeleton` (Anthropic-free); apply he
 `ingestion/pptx_tools.py` for the future Cursor stylist. Skeleton only for now — no LLM copy or
 stylist pass yet.
 
+**Slide render for vision QA (B1)** — `ingestion.render_slides.render_slides(pptx, slide_indices)`
+converts selected 0-based slides to PNGs via LibreOffice headless (`soffice`) → PDF →
+`pdftoppm`. Used later by Cursor agent scripts / the B2 review package; not an MCP tool.
+Requires LibreOffice + poppler-utils in the Docker image (or locally). Optional `SOFFICE_BIN`
+overrides the binary path.
+
+```python
+from ingestion.render_slides import render_slides
+
+pngs = render_slides("draft.pptx", [0, 2], output_dir="/tmp/qa")
+# → [/tmp/qa/slide-000.png, /tmp/qa/slide-002.png]
+```
+
+CLI (same pipeline; for agent scripts):
+
+```bash
+uv run python -m ingestion.render_slides draft.pptx -i 0,2 -o /tmp/qa
+```
+
 **In-memory vector search** — embeddings loaded into numpy at startup, cosine similarity at query
 time. No FAISS index; the corpus (2,404 slides) is small enough that in-memory search is fast and
 removes a dependency.
