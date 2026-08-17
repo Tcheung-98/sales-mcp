@@ -3,6 +3,7 @@ import io
 import json
 import logging
 import os
+from dataclasses import dataclass
 from urllib.parse import urlparse
 from uuid import uuid4
 
@@ -18,6 +19,7 @@ from pptx.oxml.ns import qn
 from pptx.presentation import Presentation as PresentationType
 from pypdf import PdfReader
 
+from ingestion.manifest import SlideManifestEntry
 from ingestion.pptx_tools import apply_replacements, set_ph_text
 from ingestion.schema import DeckSchema
 
@@ -33,6 +35,24 @@ _WEAK_MATCH_THRESHOLD = 0.5
 _PRODUCT_SECTION_LANDMARK = "2_DARK BLUE/ BRIGHT BLUE CAPSULE"
 _PRODUCT_LAYOUT = "11_Title Only"
 _TEMPLATE_URL_HOST_SUFFIXES = (".sharepoint.com", ".sharepoint.us", ".microsoft.com")
+
+
+@dataclass(frozen=True)
+class AssembledSkeleton:
+    """Presentation plus product-clone provenance for the B2 review package."""
+
+    presentation: PresentationType
+    product_clones: tuple[SlideManifestEntry, ...]
+    client_name: str
+    template_key: str
+
+    @property
+    def slide_count(self) -> int:
+        return len(self.presentation.slides)
+
+
+def _template_key_from_url(template_url: str) -> str:
+    return template_url.split("?")[0].rstrip("/").split("/")[-1]
 
 
 _SYSTEM_PROMPT_TEMPLATE = """\
@@ -426,10 +446,11 @@ class DeckGenerator:
 
     def assemble_skeleton(
         self, schema: DeckSchema, template_url: str, retriever
-    ) -> PresentationType:
+    ) -> AssembledSkeleton:
         """Clone narrative template + corpus product slides. No LLM, no S3 upload.
 
-        Stylist seam: Cursor (Phase B) receives this Presentation as draft.pptx.
+        Returns the Presentation plus product-clone provenance (slide index,
+        product name, corpus source path / slide number) for the B2 review package.
         """
         self._validate_template_url(template_url)
 
@@ -485,13 +506,30 @@ class DeckGenerator:
                 )
             )
 
-        for i, best in enumerate(best_candidates):
+        product_clones: list[SlideManifestEntry] = []
+        for i, (product, best) in enumerate(
+            zip(schema.confirmed_products, best_candidates, strict=True)
+        ):
             source_prs = self._load_pptx(best["source_path"])
             new_slide = self._clone_slide(source_prs, best["slide_number"] - 1, prs)
             self._insert_slide_at(prs, insertion_index + i)
             self._dedup_shape_ids(new_slide, prs)
+            product_clones.append(
+                SlideManifestEntry(
+                    slide_index=insertion_index + i,
+                    role="product",
+                    product_name=product.name,
+                    source_path=best["source_path"],
+                    source_slide_number=best["slide_number"],
+                )
+            )
 
-        return prs
+        return AssembledSkeleton(
+            presentation=prs,
+            product_clones=tuple(product_clones),
+            client_name=schema.client_name,
+            template_key=_template_key_from_url(template_url),
+        )
 
     def build(self, schema: DeckSchema, template_url: str, retriever) -> dict:
         """Assemble skeleton PPTX and upload. Returns a 24h presigned S3 URL.
@@ -499,7 +537,8 @@ class DeckGenerator:
         No LLM copy writing. template_url is a pre-authenticated SharePoint download
         URL resolved by Prodie.
         """
-        prs = self.assemble_skeleton(schema, template_url, retriever)
+        assembled = self.assemble_skeleton(schema, template_url, retriever)
+        prs = assembled.presentation
         buf = io.BytesIO()
         prs.save(buf)
         key = f"generated/{uuid4()}.pptx"
@@ -512,8 +551,8 @@ class DeckGenerator:
         logger.info("skeleton deck uploaded to s3://%s/%s", self._bucket, key)
         return {
             "download_url": url,
-            "slide_count": len(prs.slides),
-            "client_name": schema.client_name,
-            "template_key": template_url.split("?")[0].rstrip("/").split("/")[-1],
+            "slide_count": assembled.slide_count,
+            "client_name": assembled.client_name,
+            "template_key": assembled.template_key,
         }
 

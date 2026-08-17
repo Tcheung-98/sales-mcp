@@ -8,7 +8,7 @@ from pptx import Presentation
 from pptx.util import Inches
 
 from ingestion import generator as generator_module
-from ingestion.generator import DeckGenerator
+from ingestion.generator import AssembledSkeleton, DeckGenerator
 from ingestion.pptx_tools import apply_replacements
 from ingestion.schema import DeckSchema, Product
 
@@ -479,14 +479,24 @@ def test_assemble_skeleton_returns_presentation_without_s3(fortune_template_layo
     ):
         mock_get.return_value.content = _fortune_template_bytes()
         mock_get.return_value.raise_for_status = MagicMock()
-        prs = generator.assemble_skeleton(
+        assembled = generator.assemble_skeleton(
             schema,
             "https://fortune.sharepoint.com/template.pptx",
             mock_retriever,
         )
 
-    assert len(prs.slides) == 2
-    assert hasattr(prs, "slides")
+    assert isinstance(assembled, AssembledSkeleton)
+    assert len(assembled.presentation.slides) == 2
+    assert assembled.slide_count == 2
+    assert assembled.client_name == "Acme Corp"
+    assert assembled.template_key == "template.pptx"
+    assert len(assembled.product_clones) == 1
+    clone = assembled.product_clones[0]
+    assert clone.role == "product"
+    assert clone.slide_index == 1
+    assert clone.product_name == "Fortune 500 List"
+    assert clone.source_path == "corpus/deck.pptx"
+    assert clone.source_slide_number == 1
     generator._s3.put_object.assert_not_called()
     generator._s3.generate_presigned_url.assert_not_called()
     mock_anthropic.assert_not_called()
@@ -498,8 +508,16 @@ def test_build_delegates_to_assemble_skeleton(fortune_template_layouts):
     generator._s3.generate_presigned_url.return_value = "https://s3.example.com/deck.pptx"
     schema = _build_schema()
     mock_prs = _presentation_with_n_slides(2)
+    mock_assembled = AssembledSkeleton(
+        presentation=mock_prs,
+        product_clones=(),
+        client_name="Acme Corp",
+        template_key="template.pptx",
+    )
 
-    with patch.object(generator, "assemble_skeleton", return_value=mock_prs) as mock_assemble:
+    with patch.object(
+        generator, "assemble_skeleton", return_value=mock_assembled
+    ) as mock_assemble:
         result = generator.build(
             schema,
             "https://fortune.sharepoint.com/template.pptx",
@@ -509,4 +527,6 @@ def test_build_delegates_to_assemble_skeleton(fortune_template_layouts):
     mock_assemble.assert_called_once()
     assert result["slide_count"] == 2
     assert result["download_url"] == "https://s3.example.com/deck.pptx"
+    assert result["client_name"] == "Acme Corp"
+    assert result["template_key"] == "template.pptx"
     generator._s3.put_object.assert_called_once()
