@@ -135,8 +135,9 @@ def build_deck(schema: dict, template_url: str) -> dict:
     template_url: pre-authenticated HTTPS download URL for the .pptx template,
     resolved by Prodie from the Fortune Sales Automation SharePoint folder.
     Keeps narrative slides from the template, replaces product placeholders with
-    best corpus matches, uploads to S3, and returns a presigned download URL
-    valid for 24h. Skeleton only — no LLM copy writing or stylist pass.
+    exact GTM Product Tags slides (Deck Path + Slide #), uploads to S3, and returns
+    a presigned download URL valid for 24h. Missing/ambiguous map rows fail loud —
+    no Titan similarity substitute. Skeleton only — no LLM copy or stylist pass.
     """
     try:
         parsed = DeckSchema.model_validate(schema)
@@ -153,7 +154,7 @@ def build_deck(schema: dict, template_url: str) -> dict:
             return {"status": "escalation", "message": errors[0]}
         return {"status": "incomplete", "missing": missing, "errors": errors}
     try:
-        return _get_generator().build(parsed, template_url, _get_retriever())
+        return _get_generator().build(parsed, template_url)
     except ValueError as exc:
         return {"status": "error", "message": str(exc)}
     except requests.RequestException as exc:

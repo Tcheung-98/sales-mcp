@@ -33,6 +33,8 @@ cp .env.example .env
 | `ANTHROPIC_API_KEY` | Anthropic API key (local dev only — prod uses Secrets Manager) |
 | `MCP_SHARED_SECRET` | Bearer token for Cowork → MCP auth |
 | `RULEBOOK_KEY` | S3 key for Fortune GTM skill doc (default: `templates/rulebook.docx`) |
+| `GTM_DATABASE_KEY` | S3 key for `Fortune_AITool_GTM_Database.xlsx` (default: `templates/Fortune_AITool_GTM_Database.xlsx`) |
+| `PRODUCT_DECKS_PREFIX` | S3 prefix for Hunter product decks referenced by Deck Path (default: `product-decks/`) |
 | `TEMPLATE_URL_ALLOWED_HOSTS` | Optional extra hosts for `build_deck` template URLs (comma-separated) |
 
 ---
@@ -168,10 +170,28 @@ remains accepted until FortuneAI template assembly (C1) retires category templat
 
 **Schema validation + skeleton assembly** — `prepare_deck(schema)` validates the handoff payload
 and returns the template filename for AE review. `build_deck(schema, template_url)` fetches the
-SharePoint template, swaps product placeholders with corpus clones, and returns a presigned PPTX
-URL. Clone lives in `DeckGenerator.assemble_skeleton` (Anthropic-free); apply helpers live in
-`ingestion/pptx_tools.py` for the future Cursor stylist. Skeleton only for now — no LLM copy or
-stylist pass yet.
+SharePoint template, replaces product placeholders with **exact** slides from the GTM Product
+Tags map (`Deck Path` + `Slide #` in `Fortune_AITool_GTM_Database.xlsx`), and returns a
+presigned PPTX URL. Missing or ambiguous map rows fail loud (no Titan similarity substitute).
+Clone lives in `DeckGenerator.assemble_skeleton` (Anthropic-free); apply helpers live in
+`ingestion/pptx_tools.py`. Skeleton only for now — no LLM copy or stylist pass yet.
+
+**GTM product slide map (A5 / PI-2541)** — Product pages are deterministic. Sync the Hunter
+workbook and decks it names into S3 before build:
+
+- Sheet: `sites/dream_team/.../Fortune Hunter/Fortune_AITool_GTM_Database.xlsx` → Product Tags
+- Lookup: exact `Product Name` + `Product Category` (schema aliases: `Newsletter`→`Newsletters`,
+  `Digital Media`→`Digital Ads/Programmatic`)
+- Binaries: `product-decks/{Deck Path}` (adds `.pptx` when the sheet omits the extension)
+
+Known Product Tags coverage gaps (flag for GTM; do not invent substitutes):
+
+- Print is sparse (only Full Page); Deck Path is `FortuneAI_DeckTemplate` (no `.pptx` in sheet)
+- Many Digital Ads section/sub-section takeovers share Slide #9 on High Impact Media
+- Duplicate Branded Content rows (same name/path/slide, different GTM TAGS) — deduped as one
+- `Term Sheet` / `Next To Lead` appear in both Newsletters and Vodcasts — category required
+- No Events / Conferences / Lists rows in Product Tags today
+- Schema still allows `Events` while the sheet may not have a matching category yet
 
 **Slide render for vision QA (B1)** — `ingestion.render_slides.render_slides(pptx, slide_indices)`
 converts selected 0-based slides to PNGs via LibreOffice headless (`soffice`) → PDF →

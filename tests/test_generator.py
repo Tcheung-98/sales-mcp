@@ -9,6 +9,7 @@ from pptx.util import Inches
 
 from ingestion import generator as generator_module
 from ingestion.generator import DeckGenerator
+from ingestion.gtm_product_map import GtmProductMap, ProductSlideRef
 from ingestion.pptx_tools import apply_replacements
 from ingestion.schema import DeckSchema, Product
 
@@ -362,6 +363,30 @@ def test_validate_template_url_allows_extra_host(monkeypatch):
     DeckGenerator._validate_template_url("https://cdn.example.com/template.pptx")
 
 
+def _product_map_for(*products: Product) -> GtmProductMap:
+    """Minimal map so assemble_skeleton can resolve each confirmed product."""
+    rows = [
+        ProductSlideRef(
+            product_name=p.name,
+            category={
+                "Newsletter": "Newsletters",
+                "Digital Media": "Digital Ads/Programmatic",
+                "Branded Content": "Branded Content",
+                "Print": "Print",
+                "Events": "Events",
+            }.get(p.category, p.category),
+            deck_path="Fortune_Newsletters_2026.pptx",
+            slide_number=1,
+        )
+        for p in products
+    ]
+    # Deduplicate by name+category for multi-product schemas that share a map row shape.
+    uniq: dict[tuple[str, str], ProductSlideRef] = {}
+    for row in rows:
+        uniq[(row.product_name, row.category)] = row
+    return GtmProductMap(list(uniq.values()))
+
+
 def test_build_happy_path_returns_payload(fortune_template_layouts):
     generator = _build_generator()
     generator._s3.put_object.return_value = {}
@@ -369,56 +394,51 @@ def test_build_happy_path_returns_payload(fortune_template_layouts):
 
     schema = _build_schema()
     source_prs = _presentation_with_n_slides(1)
-    mock_retriever = MagicMock()
-    mock_retriever.search.return_value = [
-        {"score": 0.85, "source_path": "corpus/deck.pptx", "slide_number": 1}
-    ]
+    product_map = _product_map_for(*schema.confirmed_products)
 
     with (
         patch("requests.get") as mock_get,
-        patch.object(generator, "_load_pptx", return_value=source_prs),
+        patch.object(generator, "_load_pptx", return_value=source_prs) as mock_load,
     ):
         mock_get.return_value.content = _fortune_template_bytes()
         mock_get.return_value.raise_for_status = MagicMock()
         result = generator.build(
             schema,
             "https://fortune.sharepoint.com/template.pptx",
-            mock_retriever,
+            product_map=product_map,
         )
 
     assert result["download_url"] == "https://s3.example.com/deck.pptx"
     assert result["client_name"] == "Acme Corp"
     assert result["template_key"] == "template.pptx"
     assert "slide_count" in result
+    mock_load.assert_called_with("product-decks/Fortune_Newsletters_2026.pptx")
     generator._s3.put_object.assert_called_once()
     put_kwargs = generator._s3.put_object.call_args.kwargs
     assert put_kwargs["Key"].startswith("generated/")
     assert put_kwargs["Key"].endswith(".pptx")
 
 
-def test_build_weak_match_raises(fortune_template_layouts):
+def test_build_missing_gtm_map_raises(fortune_template_layouts):
     generator = _build_generator()
     schema = _build_schema()
-    mock_retriever = MagicMock()
-    mock_retriever.search.return_value = [
-        {"score": 0.3, "source_path": "corpus/deck.pptx", "slide_number": 1}
-    ]
+    product_map = GtmProductMap([])
 
     with patch("requests.get") as mock_get:
         mock_get.return_value.content = _fortune_template_bytes()
         mock_get.return_value.raise_for_status = MagicMock()
-        with pytest.raises(ValueError, match="No good corpus match"):
+        with pytest.raises(ValueError, match="No GTM Product Tags row"):
             generator.build(
                 schema,
                 "https://fortune.sharepoint.com/template.pptx",
-                mock_retriever,
+                product_map=product_map,
             )
 
 
 def test_build_missing_landmark_raises():
     generator = _build_generator()
     schema = _build_schema()
-    mock_retriever = MagicMock()
+    product_map = _product_map_for(*schema.confirmed_products)
 
     with patch("requests.get") as mock_get:
         mock_get.return_value.content = _blank_bytes(3)
@@ -427,7 +447,7 @@ def test_build_missing_landmark_raises():
             generator.build(
                 schema,
                 "https://fortune.sharepoint.com/template.pptx",
-                mock_retriever,
+                product_map=product_map,
             )
 
 
@@ -450,10 +470,7 @@ def test_build_deletes_and_inserts_correct_slide_count(fortune_template_layouts)
         ]
     )
     source_prs = _presentation_with_n_slides(1)
-    mock_retriever = MagicMock()
-    mock_retriever.search.return_value = [
-        {"score": 0.9, "source_path": "corpus/deck.pptx", "slide_number": 1}
-    ]
+    product_map = _product_map_for(*schema.confirmed_products)
 
     with (
         patch("requests.get") as mock_get,
@@ -464,11 +481,59 @@ def test_build_deletes_and_inserts_correct_slide_count(fortune_template_layouts)
         result = generator.build(
             schema,
             "https://fortune.sharepoint.com/template.pptx",
-            mock_retriever,
+            product_map=product_map,
         )
 
     # 1 landmark + 2 cloned product slides = 3
     assert result["slide_count"] == 3
+
+
+def test_assemble_skeleton_clones_exact_slide_number(fortune_template_layouts):
+    """Exact hit: Deck Path + Slide # from the map, not Titan similarity."""
+    generator = _build_generator()
+    schema = _build_schema(
+        confirmed_products=[
+            Product(
+                name="CEO Daily",
+                cadence="weekly",
+                price=20_000,
+                category="Newsletter",
+            )
+        ]
+    )
+    product_map = GtmProductMap(
+        [
+            ProductSlideRef(
+                product_name="CEO Daily",
+                category="Newsletters",
+                deck_path="Fortune_Newsletters_2026.pptx",
+                slide_number=3,
+            )
+        ]
+    )
+    # Source deck with 3 slides; clone must use index 2 (slide #3).
+    source_prs = _presentation_with_n_slides(3)
+    for i, slide in enumerate(source_prs.slides):
+        slide.shapes.title.text = f"SRC-{i + 1}"
+
+    with (
+        patch("requests.get") as mock_get,
+        patch.object(generator, "_load_pptx", return_value=source_prs) as mock_load,
+        patch.object(generator, "_clone_slide", wraps=generator._clone_slide) as mock_clone,
+    ):
+        mock_get.return_value.content = _fortune_template_bytes()
+        mock_get.return_value.raise_for_status = MagicMock()
+        prs = generator.assemble_skeleton(
+            schema,
+            "https://fortune.sharepoint.com/template.pptx",
+            product_map=product_map,
+        )
+
+    mock_load.assert_called_with("product-decks/Fortune_Newsletters_2026.pptx")
+    mock_clone.assert_called_once()
+    assert mock_clone.call_args.args[1] == 2  # 0-based index for Slide #3
+    assert len(prs.slides) == 2
+    assert prs.slides[1].shapes.title.text == "SRC-3"
 
 
 def test_assemble_skeleton_returns_presentation_without_s3(fortune_template_layouts):
@@ -476,10 +541,7 @@ def test_assemble_skeleton_returns_presentation_without_s3(fortune_template_layo
     generator = _build_generator()
     schema = _build_schema()
     source_prs = _presentation_with_n_slides(1)
-    mock_retriever = MagicMock()
-    mock_retriever.search.return_value = [
-        {"score": 0.85, "source_path": "corpus/deck.pptx", "slide_number": 1}
-    ]
+    product_map = _product_map_for(*schema.confirmed_products)
 
     with (
         patch("requests.get") as mock_get,
@@ -491,7 +553,7 @@ def test_assemble_skeleton_returns_presentation_without_s3(fortune_template_layo
         prs = generator.assemble_skeleton(
             schema,
             "https://fortune.sharepoint.com/template.pptx",
-            mock_retriever,
+            product_map=product_map,
         )
 
     assert len(prs.slides) == 2
@@ -512,7 +574,6 @@ def test_build_delegates_to_assemble_skeleton(fortune_template_layouts):
         result = generator.build(
             schema,
             "https://fortune.sharepoint.com/template.pptx",
-            MagicMock(),
         )
 
     mock_assemble.assert_called_once()
