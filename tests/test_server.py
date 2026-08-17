@@ -98,9 +98,7 @@ def test_build_deck_delegates_to_generator(mocker):
     }
     mock_generator = MagicMock()
     mock_generator.build.return_value = fake_result
-    mock_retriever = MagicMock()
     mocker.patch("server._get_generator", return_value=mock_generator)
-    mocker.patch("server._get_retriever", return_value=mock_retriever)
     result = build_deck(
         schema=_valid_schema(),
         template_url="https://fortune.sharepoint.com/template.pptx",
@@ -132,7 +130,6 @@ def test_build_deck_assembly_error(mocker):
     mock_generator = MagicMock()
     mock_generator.build.side_effect = ValueError("host not allowed")
     mocker.patch("server._get_generator", return_value=mock_generator)
-    mocker.patch("server._get_retriever", return_value=MagicMock())
     result = build_deck(
         schema=_valid_schema(),
         template_url="https://evil.example.com/template.pptx",

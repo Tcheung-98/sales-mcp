@@ -18,6 +18,11 @@ from pptx.oxml.ns import qn
 from pptx.presentation import Presentation as PresentationType
 from pypdf import PdfReader
 
+from ingestion.gtm_product_map import (
+    GtmProductMap,
+    load_gtm_product_map_from_s3,
+    product_deck_s3_key,
+)
 from ingestion.pptx_tools import apply_replacements, set_ph_text
 from ingestion.schema import DeckSchema
 
@@ -29,7 +34,6 @@ _COST_PER_M_INPUT = 3.00
 _COST_PER_M_OUTPUT = 15.00
 
 # GTM template layout names — product placeholders sit after the capsule landmark.
-_WEAK_MATCH_THRESHOLD = 0.5
 _PRODUCT_SECTION_LANDMARK = "2_DARK BLUE/ BRIGHT BLUE CAPSULE"
 _PRODUCT_LAYOUT = "11_Title Only"
 _TEMPLATE_URL_HOST_SUFFIXES = (".sharepoint.com", ".sharepoint.us", ".microsoft.com")
@@ -121,6 +125,7 @@ class DeckGenerator:
         self._rulebook_text: str | None = None
         self._api_key: str | None = None
         self._rate_sheet: str | None = None
+        self._gtm_product_map: GtmProductMap | None = None
 
     @staticmethod
     def _clone_slide(
@@ -424,14 +429,24 @@ class DeckGenerator:
         output_prs.save(buf)
         return buf.getvalue()
 
-    def assemble_skeleton(
-        self, schema: DeckSchema, template_url: str, retriever
-    ) -> PresentationType:
-        """Clone narrative template + corpus product slides. No LLM, no S3 upload.
+    def _get_gtm_product_map(self) -> GtmProductMap:
+        if self._gtm_product_map is None:
+            self._gtm_product_map = load_gtm_product_map_from_s3(self._s3, self._bucket)
+        return self._gtm_product_map
 
-        Stylist seam: Cursor (Phase B) receives this Presentation as draft.pptx.
+    def assemble_skeleton(
+        self,
+        schema: DeckSchema,
+        template_url: str,
+        product_map: GtmProductMap | None = None,
+    ) -> PresentationType:
+        """Clone narrative template + exact GTM-mapped product slides. No LLM, no S3 upload.
+
+        Each confirmed product clones Deck Path + Slide # from Fortune_AITool_GTM_Database
+        Product Tags — wholesale paste, no AI edits. Missing/ambiguous rows fail loud.
         """
         self._validate_template_url(template_url)
+        gtm_map = product_map if product_map is not None else self._get_gtm_product_map()
 
         resp = requests.get(template_url, timeout=30)
         resp.raise_for_status()
@@ -467,39 +482,52 @@ class DeckGenerator:
         for idx in sorted(product_indices, reverse=True):
             self._delete_slide(prs, idx)
 
-        failures = []
-        best_candidates = []
+        refs = []
+        failures: list[str] = []
         for product in schema.confirmed_products:
-            candidates = retriever.search(product.name, k=8)
-            best_score = max((c["score"] for c in candidates), default=0.0)
-            if best_score < _WEAK_MATCH_THRESHOLD:
-                failures.append({"product": product.name, "best_score": best_score})
-            else:
-                best_candidates.append(max(candidates, key=lambda c: c["score"]))
+            try:
+                refs.append(gtm_map.lookup(product.name, product.category))
+            except ValueError as exc:
+                failures.append(str(exc))
 
         if failures:
             raise ValueError(
-                "No good corpus match for: "
-                + ", ".join(
-                    f"{f['product']} (score {f['best_score']:.2f})" for f in failures
-                )
+                "GTM product slide map failed: " + "; ".join(failures)
             )
 
-        for i, best in enumerate(best_candidates):
-            source_prs = self._load_pptx(best["source_path"])
-            new_slide = self._clone_slide(source_prs, best["slide_number"] - 1, prs)
+        for i, ref in enumerate(refs):
+            s3_key = product_deck_s3_key(ref.deck_path)
+            try:
+                source_prs = self._load_pptx(s3_key)
+            except Exception as exc:
+                raise ValueError(
+                    f"Failed to load Deck Path {ref.deck_path!r} for product "
+                    f"{ref.product_name!r} (s3://{self._bucket}/{s3_key}): {exc}"
+                ) from exc
+            if ref.slide_number > len(source_prs.slides):
+                raise ValueError(
+                    f"Slide # {ref.slide_number} out of range for product "
+                    f"{ref.product_name!r} in {ref.deck_path!r} "
+                    f"({len(source_prs.slides)} slides)"
+                )
+            new_slide = self._clone_slide(source_prs, ref.slide_number - 1, prs)
             self._insert_slide_at(prs, insertion_index + i)
             self._dedup_shape_ids(new_slide, prs)
 
         return prs
 
-    def build(self, schema: DeckSchema, template_url: str, retriever) -> dict:
+    def build(
+        self,
+        schema: DeckSchema,
+        template_url: str,
+        product_map: GtmProductMap | None = None,
+    ) -> dict:
         """Assemble skeleton PPTX and upload. Returns a 24h presigned S3 URL.
 
         No LLM copy writing. template_url is a pre-authenticated SharePoint download
-        URL resolved by Prodie.
+        URL resolved by Prodie. Product pages use exact GTM Deck Path / Slide #.
         """
-        prs = self.assemble_skeleton(schema, template_url, retriever)
+        prs = self.assemble_skeleton(schema, template_url, product_map=product_map)
         buf = io.BytesIO()
         prs.save(buf)
         key = f"generated/{uuid4()}.pptx"
