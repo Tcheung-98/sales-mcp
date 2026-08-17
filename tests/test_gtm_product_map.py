@@ -160,3 +160,17 @@ def test_empty_deck_path_raises():
     )
     with pytest.raises(ValueError, match="empty Deck Path"):
         GtmProductMap.from_xlsx_bytes(data)
+
+
+def test_invalid_slide_number_skipped_other_rows_load():
+    data = _xlsx_bytes(
+        [
+            ("Newsletters", "CEO Daily", "ceo", "Fortune_Newsletters_2026.pptx", "3"),
+            ("Newsletters", "Fortune 500 Digest", "f500", "Fortune_Newsletters_2026.pptx", "6, 7"),
+        ]
+    )
+    product_map = GtmProductMap.from_xlsx_bytes(data)
+    ref = product_map.lookup("CEO Daily", "Newsletter")
+    assert ref.slide_number == 3
+    with pytest.raises(ValueError, match="No GTM Product Tags row"):
+        product_map.lookup("Fortune 500 Digest", "Newsletter")
