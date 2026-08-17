@@ -134,10 +134,37 @@ curl -s -X POST https://fortune-sales-mcp.tj3ek8xjdg9br.us-east-1.cs.amazonlight
 programmatically. Visual quality (typography, shapes, imagery) is preserved from the source.
 Client-specific text is replaced post-clone via placeholder targeting.
 
-**Schema-driven generation** — deck generation requires a fully hydrated `DeckSchema` (client,
-industry, budget, confirmed products). Prodie enforces sufficiency during conversation; the server
-validates independently via Pydantic and selects the SharePoint template filename from industry,
-franchise keywords, and product names.
+**Schema-driven generation** — deck generation requires a fully hydrated `DeckSchema`
+(Discovery intake + confirmed products). `DiscoverySchema` covers Workflow Discovery fields
+alone (Ideation / Sales HQ); `DeckSchema` extends it with non-empty `confirmed_products` for
+Creation. Prodie enforces sufficiency during conversation; the server validates independently
+via Pydantic and selects the SharePoint template filename from industry, franchise keywords,
+and product names.
+
+**Discovery ↔ Creation handoff (PI-2758)** — field map for Prodie / Sales HQ forms:
+
+| Workflow / form field | Schema field | Required |
+| --- | --- | --- |
+| Company name | `company_name` (alias `client_name`) | yes |
+| Industry | `industry` | yes |
+| Budget (up to 3 tiers) | `budgets[].amount` (+ optional `label`) | yes (1–3) |
+| Flight dates | `flight_dates.start` / `.end` | yes |
+| Campaign goal | `campaign_goal` | yes |
+| Targeting details | `targeting_details` | yes |
+| KPIs | `kpis` | yes |
+| KPI details | `kpi_details` | yes |
+| Campaign narrative | `campaign_narrative` | yes |
+| Preferred platforms/products | `preferred_platforms_products` | yes |
+| Additional RFP details | `additional_rfp_details` | yes |
+| Client logo | `client_logo` (URL or SharePoint path) | yes |
+| Platform/product specifics | `platform_or_product_specifics` | no |
+| Confirmed mix (Ideation out) | `confirmed_products` | Creation only |
+
+Industry enum (Workflow): Technology, Professional Services, Healthcare, Financial Services,
+Energy, Lifestyle, Luxury. Legacy `Tech` normalizes to `Technology`. `Economic Development`
+remains accepted until FortuneAI template assembly (C1) retires category templates. Legacy
+`budget_quarterly` still shims to a single budget tier. Escalation uses the max tier amount
+(≥ $750k → GTM).
 
 **Schema validation + skeleton assembly** — `prepare_deck(schema)` validates the handoff payload
 and returns the template filename for AE review. `build_deck(schema, template_url)` fetches the
