@@ -30,6 +30,7 @@ _CATEGORY_ALIASES: dict[str, str] = {
     "Digital Ads/Programmatic": "Digital Ads/Programmatic",
     "Branded Content": "Branded Content",
     "Vodcasts": "Vodcasts",
+    "Premium Video": "Vodcasts",
     "Print": "Print",
     "Events": "Events",
     "Conference Sponsorship/Media": "Events",
@@ -148,9 +149,15 @@ class GtmProductMap:
                     raise ValueError(
                         f"Product Tags row for {name!r} has empty Deck Path"
                     )
-                slide_number = _parse_slide_number(
-                    raw[idx[_COL_SLIDE]], product_name=name
-                )
+                try:
+                    slide_number = _parse_slide_number(
+                        raw[idx[_COL_SLIDE]], product_name=name
+                    )
+                except ValueError as exc:
+                    # One bad GTM cell must not block the rest of Creation.
+                    # Lookup of this product still fails loud (no row indexed).
+                    logger.warning("skipping Product Tags row: %s", exc)
+                    continue
                 parsed.append(
                     ProductSlideRef(
                         product_name=name,

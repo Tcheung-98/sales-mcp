@@ -11,7 +11,7 @@ def _valid_manifest(**overrides) -> dict:
     data = {
         "schema_version": "1",
         "client_name": "Acme Corp",
-        "template_key": "Category_Presentation_Technology.pptx",
+        "template_key": "FortuneAI_DeckTemplate.pptx",
         "slide_count": 2,
         "slides": [
             {"slide_index": 0, "role": "narrative"},

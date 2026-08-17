@@ -10,7 +10,7 @@ from starlette.routing import Route
 
 from ingestion.generator import DeckGenerator
 from ingestion.retriever import SlideRetriever
-from ingestion.schema import BUDGET_ESCALATION_ERROR, DeckSchema, select_template
+from ingestion.schema import BUDGET_ESCALATION_ERROR, DeckSchema
 
 _EXPECTED_TOKEN = os.environ.get("MCP_SHARED_SECRET")
 
@@ -103,41 +103,20 @@ def get_slide_content(deck_id: str, slide_numbers: list[int] | None = None) -> l
 
 
 @mcp.tool()
-def prepare_deck(schema: dict) -> dict:
+def build_deck(schema: dict, template_url: str | None = None) -> dict:
     """
-    Validate a deck schema and return the SharePoint template filename for AE review.
-    Call this before build_deck. Returns status 'ok' with template_filename if valid,
-    'incomplete' with missing fields if not, or 'escalation' if the budget meets the
-    GTM threshold. Prodie should fetch template_filename from the Fortune Sales
-    Automation SharePoint folder and pass its URL to build_deck.
-    """
-    try:
-        parsed = DeckSchema.model_validate(schema)
-    except ValidationError as exc:
-        missing = []
-        errors = []
-        for e in exc.errors():
-            loc = ".".join(str(p) for p in e["loc"])
-            if e["type"] == "missing":
-                missing.append(loc)
-            else:
-                errors.append(f"{loc}: {e['msg']}")
-        if any(e["type"] == BUDGET_ESCALATION_ERROR for e in exc.errors()):
-            return {"status": "escalation", "message": errors[0]}
-        return {"status": "incomplete", "missing": missing, "errors": errors}
-    return {"status": "ok", "template_filename": select_template(parsed)}
+    Assemble a skeleton Fortune pitch deck from a confirmed schema.
+    Always uses FortuneAI_DeckTemplate as the Creation spine (intro / narrative /
+    conditional category dividers / investment / thank you). Product pages are
+    exact GTM Product Tags clones (Deck Path + Slide #).
 
+    template_url: optional pre-authenticated HTTPS download URL for
+    FortuneAI_DeckTemplate.pptx (SharePoint). When omitted, the template is loaded
+    from S3 (FORTUNEAI_TEMPLATE_KEY, default templates/FortuneAI_DeckTemplate.pptx).
 
-@mcp.tool()
-def build_deck(schema: dict, template_url: str) -> dict:
-    """
-    Assemble a skeleton Fortune pitch deck from a confirmed schema and template URL.
-    template_url: pre-authenticated HTTPS download URL for the .pptx template,
-    resolved by Prodie from the Fortune Sales Automation SharePoint folder.
-    Keeps narrative slides from the template, replaces product placeholders with
-    exact GTM Product Tags slides (Deck Path + Slide #), uploads to S3, and returns
-    a presigned download URL valid for 24h. Missing/ambiguous map rows fail loud —
-    no Titan similarity substitute. Skeleton only — no LLM copy or stylist pass.
+    Uploads to S3 and returns a presigned download URL valid for 24h.
+    Missing/ambiguous map rows or unmapped categories fail loud — no Titan
+    substitute. Skeleton only — no LLM placeholder fills (C2) or stylist.
     """
     try:
         parsed = DeckSchema.model_validate(schema)

@@ -1,7 +1,7 @@
 import pytest
 from pydantic import ValidationError
 
-from ingestion.schema import DeckSchema, DiscoverySchema, select_template
+from ingestion.schema import DeckSchema, DiscoverySchema
 
 
 def _discovery_fields(**overrides) -> dict:
@@ -156,29 +156,24 @@ def test_flight_dates_end_before_start_raises():
         )
 
 
-def test_select_template_industry_match():
-    schema = DeckSchema.model_validate(_valid_schema(industry="Technology"))
-    assert select_template(schema) == "Category_Presentation_Technology.pptx.url"
-
-
-def test_select_template_industry_beats_franchise():
-    # Industry match wins even when a franchise keyword appears in a product name.
+def test_vodcasts_category_accepted():
     schema = DeckSchema.model_validate(
         _valid_schema(
-            industry="Technology",
             confirmed_products=[
                 {
-                    "name": "Fortune CFO Newsletter",
+                    "name": "Fortune Tech Vodcast",
                     "cadence": "monthly",
-                    "price": 35_000.0,
-                    "category": "Newsletter",
+                    "price": 25_000.0,
+                    "category": "Vodcasts",
                 }
-            ],
+            ]
         )
     )
-    assert select_template(schema) == "Category_Presentation_Technology.pptx.url"
+    assert schema.confirmed_products[0].category == "Vodcasts"
 
 
-def test_select_template_lifestyle_falls_back_to_general():
-    schema = DeckSchema.model_validate(_valid_schema(industry="Lifestyle"))
-    assert select_template(schema) == "General_Presentation_Fortune_Overall.pptx.url"
+def test_economic_development_industry_rejected():
+    with pytest.raises(ValidationError, match="industry"):
+        DiscoverySchema.model_validate(
+            _discovery_fields(industry="Economic Development")
+        )
