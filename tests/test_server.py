@@ -11,9 +11,18 @@ from server import (
 
 def _valid_schema(**overrides) -> dict:
     base = {
-        "client_name": "Acme Corp",
-        "industry": "Tech",
-        "budget_quarterly": 50_000.0,
+        "company_name": "Acme Corp",
+        "industry": "Technology",
+        "budgets": [{"amount": 50_000.0}],
+        "flight_dates": {"start": "2026-09-01", "end": "2026-12-31"},
+        "campaign_goal": "Drive consideration among enterprise buyers",
+        "targeting_details": "US enterprise tech decision-makers",
+        "kpis": ["Awareness", "Engagement"],
+        "kpi_details": "Lift brand awareness 10%; engagement rate above benchmark",
+        "campaign_narrative": "Acme helps mid-market CFOs modernize finance ops",
+        "preferred_platforms_products": ["Newsletters", "Branded Content"],
+        "additional_rfp_details": "Prefer Q4 flight; avoid holiday blackout weeks",
+        "client_logo": "https://example.com/acme-logo.png",
         "confirmed_products": [
             {
                 "name": "CIO Intelligence Newsletter",
@@ -66,14 +75,16 @@ def test_prepare_deck_valid_returns_template_filename():
 
 
 def test_prepare_deck_missing_fields_returns_incomplete():
-    result = prepare_deck(schema={"client_name": "Acme Corp"})
+    result = prepare_deck(schema={"company_name": "Acme Corp"})
     assert result["status"] == "incomplete"
     assert "industry" in result["missing"]
-    assert "budget_quarterly" in result["missing"]
+    assert "budgets" in result["missing"]
+    assert "flight_dates" in result["missing"]
+    assert "confirmed_products" in result["missing"]
 
 
 def test_prepare_deck_escalation_budget():
-    result = prepare_deck(schema=_valid_schema(budget_quarterly=750_000))
+    result = prepare_deck(schema=_valid_schema(budgets=[{"amount": 750_000}]))
     assert result["status"] == "escalation"
     assert "GTM" in result["message"]
 
@@ -100,7 +111,7 @@ def test_build_deck_delegates_to_generator(mocker):
 
 def test_build_deck_escalation_budget():
     result = build_deck(
-        schema=_valid_schema(budget_quarterly=750_000),
+        schema=_valid_schema(budgets=[{"amount": 750_000}]),
         template_url="https://fortune.sharepoint.com/template.pptx",
     )
     assert result["status"] == "escalation"
@@ -109,11 +120,12 @@ def test_build_deck_escalation_budget():
 
 def test_build_deck_incomplete_schema():
     result = build_deck(
-        schema={"client_name": "Acme Corp"},
+        schema={"company_name": "Acme Corp"},
         template_url="https://fortune.sharepoint.com/template.pptx",
     )
     assert result["status"] == "incomplete"
     assert "industry" in result["missing"]
+    assert "budgets" in result["missing"]
 
 
 def test_build_deck_assembly_error(mocker):

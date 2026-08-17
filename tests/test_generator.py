@@ -59,9 +59,18 @@ def _build_generator() -> DeckGenerator:
 
 def _build_schema(**overrides) -> DeckSchema:
     defaults = dict(
-        client_name="Acme Corp",
-        industry="Tech",
-        budget_quarterly=100_000,
+        company_name="Acme Corp",
+        industry="Technology",
+        budgets=[{"amount": 100_000}],
+        flight_dates={"start": "2026-09-01", "end": "2026-12-31"},
+        campaign_goal="Drive consideration among enterprise buyers",
+        targeting_details="US enterprise tech decision-makers",
+        kpis=["Awareness", "Engagement"],
+        kpi_details="Lift brand awareness 10%; engagement rate above benchmark",
+        campaign_narrative="Acme helps mid-market CFOs modernize finance ops",
+        preferred_platforms_products=["Newsletters", "Branded Content"],
+        additional_rfp_details="Prefer Q4 flight; avoid holiday blackout weeks",
+        client_logo="https://example.com/acme-logo.png",
         confirmed_products=[
             Product(
                 name="Fortune 500 List",
