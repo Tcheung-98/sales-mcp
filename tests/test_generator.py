@@ -7,7 +7,6 @@ from docx import Document
 from pptx import Presentation
 from pptx.util import Inches
 
-from ingestion import generator as generator_module
 from ingestion.generator import DeckGenerator
 from ingestion.gtm_product_map import GtmProductMap, ProductSlideRef
 from ingestion.pptx_tools import apply_replacements
@@ -24,23 +23,31 @@ def _blank_bytes(slide_count: int = 1) -> bytes:
     return buf.getvalue()
 
 
-def _fortune_template_bytes() -> bytes:
-    """Template with landmark + product slides matching patched layout constants."""
+def _fortuneai_template_bytes(*, extra_tail: int = 0) -> bytes:
+    """Minimal FortuneAI spine: 12 narrative + 5 dividers + investment + thank you.
+
+    Divider slides are titled DIV-0 .. DIV-4 so tests can assert which survived.
+    """
     prs = Presentation()
-    prs.slides.add_slide(prs.slide_layouts[1])  # landmark
-    prs.slides.add_slide(prs.slide_layouts[5])  # product slide
-    prs.slides.add_slide(prs.slide_layouts[5])  # product slide
+    # Slides 1–12: intro + narrative
+    for i in range(12):
+        slide = prs.slides.add_slide(prs.slide_layouts[1])
+        slide.shapes.title.text = f"SPINE-{i + 1}"
+    # Slides 13–17: category dividers
+    for i in range(5):
+        slide = prs.slides.add_slide(prs.slide_layouts[1])
+        slide.shapes.title.text = f"DIV-{i}"
+    # Slide 18 investment, 19 thank you
+    inv = prs.slides.add_slide(prs.slide_layouts[1])
+    inv.shapes.title.text = "INVESTMENT"
+    ty = prs.slides.add_slide(prs.slide_layouts[1])
+    ty.shapes.title.text = "THANK YOU"
+    for i in range(extra_tail):
+        slide = prs.slides.add_slide(prs.slide_layouts[1])
+        slide.shapes.title.text = f"EXTRA-{i + 1}"
     buf = io.BytesIO()
     prs.save(buf)
     return buf.getvalue()
-
-
-@pytest.fixture
-def fortune_template_layouts(monkeypatch):
-    monkeypatch.setattr(
-        generator_module, "_PRODUCT_SECTION_LANDMARK", "Title and Content"
-    )
-    monkeypatch.setattr(generator_module, "_PRODUCT_LAYOUT", "Title Only")
 
 
 def _presentation_with_n_slides(n: int) -> Presentation:
@@ -83,6 +90,11 @@ def _build_schema(**overrides) -> DeckSchema:
     )
     defaults.update(overrides)
     return DeckSchema(**defaults)
+
+
+_FORTUNEAI_URL = (
+    "https://fortune.sharepoint.com/sites/x/FortuneAI_DeckTemplate.pptx"
+)
 
 
 def _slide_with_textbox(text: str):
@@ -373,6 +385,7 @@ def _product_map_for(*products: Product) -> GtmProductMap:
                 "Digital Media": "Digital Ads/Programmatic",
                 "Branded Content": "Branded Content",
                 "Print": "Print",
+                "Vodcasts": "Vodcasts",
                 "Events": "Events",
             }.get(p.category, p.category),
             deck_path="Fortune_Newsletters_2026.pptx",
@@ -380,14 +393,17 @@ def _product_map_for(*products: Product) -> GtmProductMap:
         )
         for p in products
     ]
-    # Deduplicate by name+category for multi-product schemas that share a map row shape.
     uniq: dict[tuple[str, str], ProductSlideRef] = {}
     for row in rows:
         uniq[(row.product_name, row.category)] = row
     return GtmProductMap(list(uniq.values()))
 
 
-def test_build_happy_path_returns_payload(fortune_template_layouts):
+def _slide_titles(prs: Presentation) -> list[str]:
+    return [s.shapes.title.text for s in prs.slides]
+
+
+def test_build_happy_path_returns_payload():
     generator = _build_generator()
     generator._s3.put_object.return_value = {}
     generator._s3.generate_presigned_url.return_value = "https://s3.example.com/deck.pptx"
@@ -400,17 +416,13 @@ def test_build_happy_path_returns_payload(fortune_template_layouts):
         patch("requests.get") as mock_get,
         patch.object(generator, "_load_pptx", return_value=source_prs) as mock_load,
     ):
-        mock_get.return_value.content = _fortune_template_bytes()
+        mock_get.return_value.content = _fortuneai_template_bytes()
         mock_get.return_value.raise_for_status = MagicMock()
-        result = generator.build(
-            schema,
-            "https://fortune.sharepoint.com/template.pptx",
-            product_map=product_map,
-        )
+        result = generator.build(schema, _FORTUNEAI_URL, product_map=product_map)
 
     assert result["download_url"] == "https://s3.example.com/deck.pptx"
     assert result["client_name"] == "Acme Corp"
-    assert result["template_key"] == "template.pptx"
+    assert result["template_key"] == "FortuneAI_DeckTemplate.pptx"
     assert "slide_count" in result
     mock_load.assert_called_with("product-decks/Fortune_Newsletters_2026.pptx")
     generator._s3.put_object.assert_called_once()
@@ -419,23 +431,32 @@ def test_build_happy_path_returns_payload(fortune_template_layouts):
     assert put_kwargs["Key"].endswith(".pptx")
 
 
-def test_build_missing_gtm_map_raises(fortune_template_layouts):
+def test_build_rejects_non_fortuneai_template_url():
+    generator = _build_generator()
+    schema = _build_schema()
+    product_map = _product_map_for(*schema.confirmed_products)
+
+    with pytest.raises(ValueError, match="FortuneAI_DeckTemplate"):
+        generator.build(
+            schema,
+            "https://fortune.sharepoint.com/Category_Presentation_Technology.pptx",
+            product_map=product_map,
+        )
+
+
+def test_build_missing_gtm_map_raises():
     generator = _build_generator()
     schema = _build_schema()
     product_map = GtmProductMap([])
 
     with patch("requests.get") as mock_get:
-        mock_get.return_value.content = _fortune_template_bytes()
+        mock_get.return_value.content = _fortuneai_template_bytes()
         mock_get.return_value.raise_for_status = MagicMock()
         with pytest.raises(ValueError, match="No GTM Product Tags row"):
-            generator.build(
-                schema,
-                "https://fortune.sharepoint.com/template.pptx",
-                product_map=product_map,
-            )
+            generator.build(schema, _FORTUNEAI_URL, product_map=product_map)
 
 
-def test_build_missing_landmark_raises():
+def test_build_too_few_template_slides_raises():
     generator = _build_generator()
     schema = _build_schema()
     product_map = _product_map_for(*schema.confirmed_products)
@@ -443,52 +464,109 @@ def test_build_missing_landmark_raises():
     with patch("requests.get") as mock_get:
         mock_get.return_value.content = _blank_bytes(3)
         mock_get.return_value.raise_for_status = MagicMock()
-        with pytest.raises(ValueError, match="missing product section landmark"):
-            generator.build(
-                schema,
-                "https://fortune.sharepoint.com/template.pptx",
-                product_map=product_map,
-            )
+        with pytest.raises(ValueError, match="at least 19"):
+            generator.build(schema, _FORTUNEAI_URL, product_map=product_map)
 
 
-def test_build_deletes_and_inserts_correct_slide_count(fortune_template_layouts):
+def test_assemble_omits_empty_dividers_and_keeps_order():
+    """Only funded dividers remain; High-Impact before Print; empty Premium omitted."""
     generator = _build_generator()
-    generator._s3.put_object.return_value = {}
-    generator._s3.generate_presigned_url.return_value = "https://s3.example.com/deck.pptx"
-
     schema = _build_schema(
         confirmed_products=[
             Product(
-                name="Product A", cadence="annual", price=10_000, category="Newsletter"
-            ),
-            Product(
-                name="Product B",
+                name="Product A",
                 cadence="monthly",
                 price=5_000,
                 category="Digital Media",
             ),
+            Product(
+                name="Product B",
+                cadence="annual",
+                price=35_000,
+                category="Print",
+            ),
         ]
     )
     source_prs = _presentation_with_n_slides(1)
+    source_prs.slides[0].shapes.title.text = "PRODUCT"
     product_map = _product_map_for(*schema.confirmed_products)
 
     with (
         patch("requests.get") as mock_get,
         patch.object(generator, "_load_pptx", return_value=source_prs),
     ):
-        mock_get.return_value.content = _fortune_template_bytes()
+        mock_get.return_value.content = _fortuneai_template_bytes(extra_tail=1)
         mock_get.return_value.raise_for_status = MagicMock()
-        result = generator.build(
-            schema,
-            "https://fortune.sharepoint.com/template.pptx",
-            product_map=product_map,
+        prs = generator.assemble_skeleton(
+            schema, _FORTUNEAI_URL, product_map=product_map
         )
 
-    # 1 landmark + 2 cloned product slides = 3
-    assert result["slide_count"] == 3
+    titles = _slide_titles(prs)
+    # 12 spine + DIV-0 + product + DIV-3 + product + investment + thank you
+    assert titles[:12] == [f"SPINE-{i}" for i in range(1, 13)]
+    assert titles[12] == "DIV-0"  # High-Impact Media
+    assert titles[13] == "PRODUCT"
+    assert titles[14] == "DIV-3"  # Print (index 3 in divider list)
+    assert titles[15] == "PRODUCT"
+    assert titles[16] == "INVESTMENT"
+    assert titles[17] == "THANK YOU"
+    assert "DIV-1" not in titles
+    assert "DIV-2" not in titles
+    assert "DIV-4" not in titles
+    assert "EXTRA-1" not in titles
+    assert len(prs.slides) == 18
 
 
-def test_assemble_skeleton_clones_exact_slide_number(fortune_template_layouts):
+def test_assemble_single_newsletter_keeps_editorial_divider_only():
+    generator = _build_generator()
+    schema = _build_schema()
+    source_prs = _presentation_with_n_slides(1)
+    source_prs.slides[0].shapes.title.text = "NL-PRODUCT"
+    product_map = _product_map_for(*schema.confirmed_products)
+
+    with (
+        patch("requests.get") as mock_get,
+        patch.object(generator, "_load_pptx", return_value=source_prs),
+    ):
+        mock_get.return_value.content = _fortuneai_template_bytes()
+        mock_get.return_value.raise_for_status = MagicMock()
+        prs = generator.assemble_skeleton(
+            schema, _FORTUNEAI_URL, product_map=product_map
+        )
+
+    titles = _slide_titles(prs)
+    # 12 spine + Editorial (DIV-1) + product + investment + thank you = 16
+    assert len(prs.slides) == 16
+    assert titles[12] == "DIV-1"
+    assert titles[13] == "NL-PRODUCT"
+    assert titles[14] == "INVESTMENT"
+    assert titles[15] == "THANK YOU"
+
+
+def test_assemble_events_product_fails_loud():
+    generator = _build_generator()
+    schema = _build_schema(
+        confirmed_products=[
+            Product(
+                name="BrainStorm Summit",
+                cadence="annual",
+                price=100_000,
+                category="Events",
+            )
+        ]
+    )
+    product_map = _product_map_for(*schema.confirmed_products)
+
+    with patch("requests.get") as mock_get:
+        mock_get.return_value.content = _fortuneai_template_bytes()
+        mock_get.return_value.raise_for_status = MagicMock()
+        with pytest.raises(ValueError, match="escalate"):
+            generator.assemble_skeleton(
+                schema, _FORTUNEAI_URL, product_map=product_map
+            )
+
+
+def test_assemble_skeleton_clones_exact_slide_number():
     """Exact hit: Deck Path + Slide # from the map, not Titan similarity."""
     generator = _build_generator()
     schema = _build_schema(
@@ -511,7 +589,6 @@ def test_assemble_skeleton_clones_exact_slide_number(fortune_template_layouts):
             )
         ]
     )
-    # Source deck with 3 slides; clone must use index 2 (slide #3).
     source_prs = _presentation_with_n_slides(3)
     for i, slide in enumerate(source_prs.slides):
         slide.shapes.title.text = f"SRC-{i + 1}"
@@ -521,22 +598,19 @@ def test_assemble_skeleton_clones_exact_slide_number(fortune_template_layouts):
         patch.object(generator, "_load_pptx", return_value=source_prs) as mock_load,
         patch.object(generator, "_clone_slide", wraps=generator._clone_slide) as mock_clone,
     ):
-        mock_get.return_value.content = _fortune_template_bytes()
+        mock_get.return_value.content = _fortuneai_template_bytes()
         mock_get.return_value.raise_for_status = MagicMock()
         prs = generator.assemble_skeleton(
-            schema,
-            "https://fortune.sharepoint.com/template.pptx",
-            product_map=product_map,
+            schema, _FORTUNEAI_URL, product_map=product_map
         )
 
     mock_load.assert_called_with("product-decks/Fortune_Newsletters_2026.pptx")
     mock_clone.assert_called_once()
     assert mock_clone.call_args.args[1] == 2  # 0-based index for Slide #3
-    assert len(prs.slides) == 2
-    assert prs.slides[1].shapes.title.text == "SRC-3"
+    assert prs.slides[13].shapes.title.text == "SRC-3"
 
 
-def test_assemble_skeleton_returns_presentation_without_s3(fortune_template_layouts):
+def test_assemble_skeleton_returns_presentation_without_s3_upload():
     """Seam for Cursor: assemble only — no Anthropic, no upload."""
     generator = _build_generator()
     schema = _build_schema()
@@ -548,22 +622,52 @@ def test_assemble_skeleton_returns_presentation_without_s3(fortune_template_layo
         patch.object(generator, "_load_pptx", return_value=source_prs),
         patch("anthropic.Anthropic") as mock_anthropic,
     ):
-        mock_get.return_value.content = _fortune_template_bytes()
+        mock_get.return_value.content = _fortuneai_template_bytes()
         mock_get.return_value.raise_for_status = MagicMock()
         prs = generator.assemble_skeleton(
-            schema,
-            "https://fortune.sharepoint.com/template.pptx",
-            product_map=product_map,
+            schema, _FORTUNEAI_URL, product_map=product_map
         )
 
-    assert len(prs.slides) == 2
+    assert len(prs.slides) == 16
     assert hasattr(prs, "slides")
     generator._s3.put_object.assert_not_called()
     generator._s3.generate_presigned_url.assert_not_called()
     mock_anthropic.assert_not_called()
 
 
-def test_build_delegates_to_assemble_skeleton(fortune_template_layouts):
+def test_build_loads_fortuneai_from_s3_when_url_omitted():
+    generator = _build_generator()
+    generator._s3.put_object.return_value = {}
+    generator._s3.generate_presigned_url.return_value = "https://s3.example.com/deck.pptx"
+    schema = _build_schema()
+    product_map = _product_map_for(*schema.confirmed_products)
+    source_prs = _presentation_with_n_slides(1)
+
+    def _get_object(**kwargs):
+        key = kwargs["Key"]
+        body = MagicMock()
+        if key.startswith("templates/"):
+            body.read.return_value = _fortuneai_template_bytes()
+        else:
+            buf = io.BytesIO()
+            source_prs.save(buf)
+            body.read.return_value = buf.getvalue()
+        return {"Body": body}
+
+    generator._s3.get_object.side_effect = _get_object
+
+    with patch.object(generator, "_load_pptx", return_value=source_prs) as mock_load:
+        result = generator.build(schema, template_url=None, product_map=product_map)
+
+    assert result["template_key"] == "FortuneAI_DeckTemplate.pptx"
+    assert result["slide_count"] == 16
+    generator._s3.get_object.assert_any_call(
+        Bucket="test-bucket", Key="templates/FortuneAI_DeckTemplate.pptx"
+    )
+    mock_load.assert_called_with("product-decks/Fortune_Newsletters_2026.pptx")
+
+
+def test_build_delegates_to_assemble_skeleton():
     generator = _build_generator()
     generator._s3.put_object.return_value = {}
     generator._s3.generate_presigned_url.return_value = "https://s3.example.com/deck.pptx"
@@ -571,12 +675,10 @@ def test_build_delegates_to_assemble_skeleton(fortune_template_layouts):
     mock_prs = _presentation_with_n_slides(2)
 
     with patch.object(generator, "assemble_skeleton", return_value=mock_prs) as mock_assemble:
-        result = generator.build(
-            schema,
-            "https://fortune.sharepoint.com/template.pptx",
-        )
+        result = generator.build(schema, _FORTUNEAI_URL)
 
     mock_assemble.assert_called_once()
     assert result["slide_count"] == 2
     assert result["download_url"] == "https://s3.example.com/deck.pptx"
+    assert result["template_key"] == "FortuneAI_DeckTemplate.pptx"
     generator._s3.put_object.assert_called_once()

@@ -30,6 +30,7 @@ _CATEGORY_ALIASES: dict[str, str] = {
     "Digital Ads/Programmatic": "Digital Ads/Programmatic",
     "Branded Content": "Branded Content",
     "Vodcasts": "Vodcasts",
+    "Premium Video": "Vodcasts",
     "Print": "Print",
     "Events": "Events",
     "Conference Sponsorship/Media": "Events",

@@ -35,6 +35,7 @@ cp .env.example .env
 | `RULEBOOK_KEY` | S3 key for Fortune GTM skill doc (default: `templates/rulebook.docx`) |
 | `GTM_DATABASE_KEY` | S3 key for `Fortune_AITool_GTM_Database.xlsx` (default: `templates/Fortune_AITool_GTM_Database.xlsx`) |
 | `PRODUCT_DECKS_PREFIX` | S3 prefix for Hunter product decks referenced by Deck Path (default: `product-decks/`) |
+| `FORTUNEAI_TEMPLATE_KEY` | S3 key for Creation spine (default: `templates/FortuneAI_DeckTemplate.pptx`) |
 | `TEMPLATE_URL_ALLOWED_HOSTS` | Optional extra hosts for `build_deck` template URLs (comma-separated) |
 
 ---
@@ -163,18 +164,20 @@ and product names.
 | Confirmed mix (Ideation out) | `confirmed_products` | Creation only |
 
 Industry enum (Workflow): Technology, Professional Services, Healthcare, Financial Services,
-Energy, Lifestyle, Luxury. Legacy `Tech` normalizes to `Technology`. `Economic Development`
-remains accepted until FortuneAI template assembly (C1) retires category templates. Legacy
+Energy, Lifestyle, Luxury. Legacy `Tech` normalizes to `Technology`. Legacy
 `budget_quarterly` still shims to a single budget tier. Escalation uses the max tier amount
 (≥ $750k → GTM).
 
-**Schema validation + skeleton assembly** — `prepare_deck(schema)` validates the handoff payload
-and returns the template filename for AE review. `build_deck(schema, template_url)` fetches the
-SharePoint template, replaces product placeholders with **exact** slides from the GTM Product
-Tags map (`Deck Path` + `Slide #` in `Fortune_AITool_GTM_Database.xlsx`), and returns a
-presigned PPTX URL. Missing or ambiguous map rows fail loud (no Titan similarity substitute).
-Clone lives in `DeckGenerator.assemble_skeleton` (Anthropic-free); apply helpers live in
-`ingestion/pptx_tools.py`. Skeleton only for now — no LLM copy or stylist pass yet.
+**Skeleton assembly (C1 / PI-2756)** — `build_deck(schema, template_url?)` validates the handoff
+and always assembles from **FortuneAI_DeckTemplate** (not industry `Category_Presentation_*`).
+Optional `template_url` must name FortuneAI_DeckTemplate (SharePoint download URL); when omitted,
+the template loads from S3 (`FORTUNEAI_TEMPLATE_KEY`). Keeps intro / narrative / investment /
+thank-you stock (placeholder fills are C2). Inserts category dividers **only when ≥1 funded
+product** maps to that section (fixed order: High-Impact Media → Editorial Alignment →
+Premium Video → Print → Branded Content). Product pages under each divider are **exact** GTM
+Product Tags clones (`Deck Path` + `Slide #`). Events / Conference products fail loud (GTM
+escalate). Missing or ambiguous map rows fail loud (no Titan substitute). Clone lives in
+`DeckGenerator.assemble_skeleton` (Anthropic-free). Skeleton only — no LLM copy or stylist.
 
 **GTM product slide map (A5 / PI-2541)** — Product pages are deterministic. Sync the Hunter
 workbook and decks it names into S3 before build:
