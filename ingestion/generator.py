@@ -18,6 +18,7 @@ from pptx.oxml.ns import qn
 from pptx.presentation import Presentation as PresentationType
 from pypdf import PdfReader
 
+from ingestion.audience_data import AudienceData, load_audience_data_from_s3
 from ingestion.category_dividers import (
     CATEGORY_DIVIDERS,
     FORTUNEAI_DIVIDER_COUNT,
@@ -34,7 +35,8 @@ from ingestion.gtm_product_map import (
     load_gtm_product_map_from_s3,
     product_deck_s3_key,
 )
-from ingestion.pptx_tools import apply_replacements, set_ph_text
+from ingestion.placeholder_fills import apply_placeholders, fetch_logo_bytes
+from ingestion.pptx_tools import apply_replacements, delete_slide, set_ph_text
 from ingestion.schema import DeckSchema
 
 logger = logging.getLogger(__name__)
@@ -134,6 +136,7 @@ class DeckGenerator:
         self._api_key: str | None = None
         self._rate_sheet: str | None = None
         self._gtm_product_map: GtmProductMap | None = None
+        self._audience_data: AudienceData | None = None
 
     @staticmethod
     def _clone_slide(
@@ -188,11 +191,7 @@ class DeckGenerator:
 
     @staticmethod
     def _delete_slide(prs: PresentationType, slide_idx: int) -> None:
-        sld_id_lst = prs.slides._sldIdLst
-        sld_id = sld_id_lst[slide_idx]
-        r_id = sld_id.get(qn("r:id"))
-        prs.part.drop_rel(r_id)
-        sld_id_lst.remove(sld_id)
+        delete_slide(prs, slide_idx)
 
     @staticmethod
     def _insert_slide_at(prs: PresentationType, position: int) -> None:
@@ -442,6 +441,11 @@ class DeckGenerator:
             self._gtm_product_map = load_gtm_product_map_from_s3(self._s3, self._bucket)
         return self._gtm_product_map
 
+    def _get_audience_data(self) -> AudienceData:
+        if self._audience_data is None:
+            self._audience_data = load_audience_data_from_s3(self._s3, self._bucket)
+        return self._audience_data
+
     def _load_fortuneai_template(
         self, template_url: str | None
     ) -> tuple[PresentationType, str]:
@@ -524,7 +528,7 @@ class DeckGenerator:
     ) -> PresentationType:
         """Assemble FortuneAI spine + conditional dividers + exact GTM product clones.
 
-        Keeps intro/narrative/investment/thank-you stock (C2 fills later). Inserts
+        Keeps intro/narrative/investment/thank-you stock (C2 fills in ``build``). Inserts
         category dividers only when ≥1 funded product maps to that section. Product
         pages are wholesale A5 clones — no AI edits.
         """
@@ -569,14 +573,28 @@ class DeckGenerator:
         schema: DeckSchema,
         template_url: str | None = None,
         product_map: GtmProductMap | None = None,
+        audience_data: AudienceData | None = None,
+        logo_bytes: bytes | None = None,
     ) -> dict:
-        """Assemble FortuneAI skeleton PPTX and upload. Returns a 24h presigned URL.
+        """Assemble FortuneAI PPTX, fill deterministic placeholders, upload.
 
         template_url: optional pre-authenticated SharePoint download URL for
         FortuneAI_DeckTemplate. When omitted, loads from S3 (FORTUNEAI_TEMPLATE_KEY).
-        Product pages use exact GTM Deck Path / Slide #. No LLM copy or stylist.
+        Product pages use exact GTM Deck Path / Slide #. Deterministic C2 fills
+        (date, logo, history, audience Reach/Index, program types, investment).
+        AI tokens ([TITLE], Opportunity, audience title, program blurbs) stay
+        until Chunk 5. No stylist.
         """
         prs = self.assemble_skeleton(schema, template_url, product_map=product_map)
+        audience = (
+            audience_data if audience_data is not None else self._get_audience_data()
+        )
+        logo = (
+            logo_bytes if logo_bytes is not None else fetch_logo_bytes(schema.client_logo)
+        )
+        warnings = apply_placeholders(
+            prs, schema, audience=audience, logo_bytes=logo
+        )
         buf = io.BytesIO()
         prs.save(buf)
         key = f"generated/{uuid4()}.pptx"
@@ -586,11 +604,12 @@ class DeckGenerator:
             Params={"Bucket": self._bucket, "Key": key},
             ExpiresIn=86400,
         )
-        logger.info("skeleton deck uploaded to s3://%s/%s", self._bucket, key)
+        logger.info("deck uploaded to s3://%s/%s", self._bucket, key)
         return {
             "download_url": url,
             "slide_count": len(prs.slides),
             "client_name": schema.client_name,
             "template_key": FORTUNEAI_TEMPLATE_BASENAME,
+            "warnings": warnings,
         }
 
