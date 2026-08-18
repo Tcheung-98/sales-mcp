@@ -11,6 +11,11 @@ from ingestion.generator import DeckGenerator
 from ingestion.gtm_product_map import GtmProductMap, ProductSlideRef
 from ingestion.pptx_tools import apply_replacements
 from ingestion.schema import DeckSchema, Product
+from tests.fortuneai_placeholder_fixture import (
+    MINIMAL_PNG,
+    fortuneai_fixture_bytes,
+    sample_audience_data,
+)
 
 
 def _blank_bytes(slide_count: int = 1) -> bytes:
@@ -69,10 +74,12 @@ def _build_schema(**overrides) -> DeckSchema:
     defaults = dict(
         company_name="Acme Corp",
         industry="Technology",
-        budgets=[{"amount": 100_000}],
+        budgets=[{"amount": 50_000}],
         flight_dates={"start": "2026-09-01", "end": "2026-12-31"},
         campaign_goal="Drive consideration among enterprise buyers",
-        targeting_details="US enterprise tech decision-makers",
+        targeting_details=(
+            "US enterprise tech decision-makers, Chief Executive Officer, C-suite"
+        ),
         kpis=["Awareness", "Engagement"],
         kpi_details="Lift brand awareness 10%; engagement rate above benchmark",
         campaign_narrative="Acme helps mid-market CFOs modernize finance ops",
@@ -416,14 +423,21 @@ def test_build_happy_path_returns_payload():
         patch("requests.get") as mock_get,
         patch.object(generator, "_load_pptx", return_value=source_prs) as mock_load,
     ):
-        mock_get.return_value.content = _fortuneai_template_bytes()
+        mock_get.return_value.content = fortuneai_fixture_bytes()
         mock_get.return_value.raise_for_status = MagicMock()
-        result = generator.build(schema, _FORTUNEAI_URL, product_map=product_map)
+        result = generator.build(
+            schema,
+            _FORTUNEAI_URL,
+            product_map=product_map,
+            audience_data=sample_audience_data(),
+            logo_bytes=MINIMAL_PNG,
+        )
 
     assert result["download_url"] == "https://s3.example.com/deck.pptx"
     assert result["client_name"] == "Acme Corp"
     assert result["template_key"] == "FortuneAI_DeckTemplate.pptx"
-    assert "slide_count" in result
+    assert result["slide_count"] == 10
+    assert result["warnings"] == []
     mock_load.assert_called_with("product-decks/Fortune_Newsletters_2026.pptx")
     generator._s3.put_object.assert_called_once()
     put_kwargs = generator._s3.put_object.call_args.kwargs
@@ -646,8 +660,10 @@ def test_build_loads_fortuneai_from_s3_when_url_omitted():
     def _get_object(**kwargs):
         key = kwargs["Key"]
         body = MagicMock()
-        if key.startswith("templates/"):
-            body.read.return_value = _fortuneai_template_bytes()
+        if key == "templates/FortuneAI_DeckTemplate.pptx":
+            body.read.return_value = fortuneai_fixture_bytes()
+        elif key.endswith(".xlsx"):
+            body.read.return_value = b"not-used"
         else:
             buf = io.BytesIO()
             source_prs.save(buf)
@@ -657,10 +673,16 @@ def test_build_loads_fortuneai_from_s3_when_url_omitted():
     generator._s3.get_object.side_effect = _get_object
 
     with patch.object(generator, "_load_pptx", return_value=source_prs) as mock_load:
-        result = generator.build(schema, template_url=None, product_map=product_map)
+        result = generator.build(
+            schema,
+            template_url=None,
+            product_map=product_map,
+            audience_data=sample_audience_data(),
+            logo_bytes=MINIMAL_PNG,
+        )
 
     assert result["template_key"] == "FortuneAI_DeckTemplate.pptx"
-    assert result["slide_count"] == 16
+    assert result["slide_count"] == 10
     generator._s3.get_object.assert_any_call(
         Bucket="test-bucket", Key="templates/FortuneAI_DeckTemplate.pptx"
     )
@@ -674,11 +696,71 @@ def test_build_delegates_to_assemble_skeleton():
     schema = _build_schema()
     mock_prs = _presentation_with_n_slides(2)
 
-    with patch.object(generator, "assemble_skeleton", return_value=mock_prs) as mock_assemble:
-        result = generator.build(schema, _FORTUNEAI_URL)
+    with (
+        patch.object(generator, "assemble_skeleton", return_value=mock_prs) as mock_assemble,
+        patch("ingestion.generator.apply_placeholders", return_value=[]),
+    ):
+        result = generator.build(
+            schema,
+            _FORTUNEAI_URL,
+            audience_data=sample_audience_data(),
+            logo_bytes=MINIMAL_PNG,
+        )
 
     mock_assemble.assert_called_once()
     assert result["slide_count"] == 2
     assert result["download_url"] == "https://s3.example.com/deck.pptx"
     assert result["template_key"] == "FortuneAI_DeckTemplate.pptx"
     generator._s3.put_object.assert_called_once()
+
+
+def test_build_leaves_product_clone_title_untouched():
+    generator = _build_generator()
+    generator._s3.put_object.return_value = {}
+    generator._s3.generate_presigned_url.return_value = "https://s3.example.com/deck.pptx"
+    schema = _build_schema(
+        confirmed_products=[
+            Product(
+                name="CEO Daily",
+                cadence="weekly",
+                price=50_000,
+                category="Newsletter",
+            )
+        ]
+    )
+    product_map = GtmProductMap(
+        [
+            ProductSlideRef(
+                product_name="CEO Daily",
+                category="Newsletters",
+                deck_path="Fortune_Newsletters_2026.pptx",
+                slide_number=1,
+            )
+        ]
+    )
+    source_prs = _presentation_with_n_slides(1)
+    source_prs.slides[0].shapes.title.text = "CEO DAILY"
+
+    with (
+        patch("requests.get") as mock_get,
+        patch.object(generator, "_load_pptx", return_value=source_prs),
+    ):
+        mock_get.return_value.content = fortuneai_fixture_bytes()
+        mock_get.return_value.raise_for_status = MagicMock()
+        result = generator.build(
+            schema,
+            _FORTUNEAI_URL,
+            product_map=product_map,
+            audience_data=sample_audience_data(),
+            logo_bytes=MINIMAL_PNG,
+        )
+
+    body = generator._s3.put_object.call_args.kwargs["Body"]
+    built = Presentation(io.BytesIO(body))
+    titles = [
+        s.shapes.title.text
+        for s in built.slides
+        if s.shapes.title is not None and s.shapes.title.text
+    ]
+    assert "CEO DAILY" in titles
+    assert result["slide_count"] == 10

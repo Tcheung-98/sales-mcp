@@ -133,3 +133,15 @@ def test_rank_segments_by_index_does_not_invent_metrics():
 
 def test_match_segment_names_empty_targeting():
     assert match_segment_names("", ["C-suite"]) == []
+
+
+def test_match_curly_apostrophe_in_targeting():
+    data = AudienceData(
+        [
+            AudienceRow("Influences Other People's Investments", "4.0M", "161"),
+            AudienceRow("C-suite", "3.6M", "172"),
+        ]
+    )
+    rows = data.match_targeting("Influences Other People’s Investments in the US")
+    assert [r.segment for r in rows] == ["Influences Other People's Investments"]
+    assert rows[0].reach == "4.0M"

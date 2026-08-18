@@ -13,6 +13,7 @@ from pptx import Presentation
 from pptx.enum.shapes import PP_PLACEHOLDER
 from pptx.util import Inches
 
+from ingestion.audience_data import AudienceData, AudienceRow
 from ingestion.pptx_tools import APOS, CLIENT_NAME_POSSESSIVE_TOKEN, CLIENT_NAME_TOKEN, LOGO_TOKEN
 
 # 1x1 PNG — valid image for insert_logo tests (no SharePoint).
@@ -20,6 +21,22 @@ MINIMAL_PNG = bytes.fromhex(
     "89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c489"
     "0000000a49444154789c63000100000500010d0a2db40000000049454e44ae426082"
 )
+
+
+def sample_audience_data() -> AudienceData:
+    """Small Audience Data index for CI (no live GTM xlsx)."""
+    return AudienceData(
+        [
+            AudienceRow("Chief Executive Officer", "1.1M", "154"),
+            AudienceRow("C-suite", "3.6M", "172"),
+            AudienceRow("Chief Financial Officer", "422K", "146"),
+            AudienceRow("Chief Information Officer", "52K", "207"),
+            AudienceRow("Chief Technology Officer", "970K", "255"),
+            AudienceRow("Chief Data Officer", "299K", "219"),
+            AudienceRow("Active Investor", "2.3M", "118"),
+            AudienceRow("Wealthy (HNW)", "697K", "161"),
+        ]
+    )
 
 WHY_FORTUNE_STOCK = "FORTUNE POWERS THE LEADING MINDS IN BUSINESS"
 HISTORY_BODY = (
@@ -110,8 +127,10 @@ def build_fortuneai_fixture_prs() -> Presentation:
 
     inv = prs.slides.add_slide(prs.slide_layouts[6])
     _add_textbox(inv, "[BUDGET]", top_in=0.4)
-    _add_textbox(inv, "[PRODUCT CATEGORY]", top_in=1.0)
-    _add_textbox(inv, "[PRODUCT + PRODUCT PRICE]", top_in=1.5)
+    cat = inv.shapes.add_textbox(Inches(0.5), Inches(1.0), Inches(8), Inches(1.6))
+    cat.text_frame.paragraphs[0].add_run().text = "[PRODUCT CATEGORY]"
+    price_para = cat.text_frame.add_paragraph()
+    price_para.add_run().text = "[PRODUCT + PRODUCT PRICE] "
 
     _intro_or_thanks(prs, thanks=True)
     return prs

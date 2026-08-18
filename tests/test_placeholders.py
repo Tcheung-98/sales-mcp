@@ -1,4 +1,4 @@
-"""C2 placeholder primitives and variant select (unwired from assemble_skeleton)."""
+"""C2 placeholder primitives and variant select."""
 
 from __future__ import annotations
 
@@ -19,6 +19,7 @@ from ingestion.pptx_tools import (
     CLIENT_NAME_TOKEN,
     LOGO_TOKEN,
     insert_logo,
+    replace_first_token,
     replace_token,
 )
 from tests.fortuneai_placeholder_fixture import (
@@ -119,6 +120,15 @@ def test_replace_token_literal_product_type():
     assert hits == 2
     assert "PRODUCT TYPE" not in blob
     assert blob.count("Editorial Alignment") == 2
+
+
+def test_replace_first_token_only_swaps_one_product_type():
+    prs = build_fortuneai_fixture_prs()
+    program = prs.slides[9]
+    assert replace_first_token(program, "PRODUCT TYPE", "Editorial Alignment") == 1
+    blob = " ".join(_slide_texts(program))
+    assert blob.count("Editorial Alignment") == 1
+    assert blob.count("PRODUCT TYPE") == 1
 
 
 def test_insert_logo_lands_on_intro_and_thanks():

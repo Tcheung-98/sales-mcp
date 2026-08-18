@@ -1,8 +1,9 @@
-"""C2 audience / program variant selection (unwired from assemble_skeleton).
+"""C2 audience / program variant selection.
 
 Stock FortuneAI indices 0–11 stay valid through C1 (C1 only mutates from the
 first divider at index 12). Identify variants by those indices, not layout names
-(Chunk 0: Audience/Program layouts are not unique).
+(Chunk 0: Audience/Program layouts are not unique). ``build()`` calls
+``delete_unused_variants`` after deterministic fills.
 """
 
 from __future__ import annotations

@@ -47,6 +47,11 @@ def _index_sort_key(row: AudienceRow) -> int:
         return 0
 
 
+def _fold_name(value: str) -> str:
+    """Case-fold and normalize apostrophes so Word/Prodie curly quotes still match."""
+    return value.replace("\u2019", "'").replace("\u2018", "'").lower()
+
+
 def match_segment_names(targeting_details: str, known_names: list[str]) -> list[str]:
     """Return known Audience Data names found in targeting text.
 
@@ -54,20 +59,19 @@ def match_segment_names(targeting_details: str, known_names: list[str]) -> list[
     short name and a longer name that contains it match, keep only the longer
     name. Order is first appearance in ``targeting_details``.
     """
-    text = targeting_details or ""
-    text_l = text.lower()
+    text_f = _fold_name(targeting_details or "")
     hits: list[str] = []
     for name in known_names:
-        if name.lower() in text_l:
+        if _fold_name(name) in text_f:
             hits.append(name)
     filtered = [
         name
         for name in hits
         if not any(
-            name != other and name.lower() in other.lower() for other in hits
+            name != other and _fold_name(name) in _fold_name(other) for other in hits
         )
     ]
-    filtered.sort(key=lambda n: text_l.find(n.lower()))
+    filtered.sort(key=lambda n: text_f.find(_fold_name(n)))
     return filtered
 
 
@@ -78,7 +82,7 @@ class AudienceData:
         unique: list[AudienceRow] = []
         self._by_lower: dict[str, AudienceRow] = {}
         for row in rows:
-            key = row.segment.lower()
+            key = _fold_name(row.segment)
             existing = self._by_lower.get(key)
             if existing is None:
                 self._by_lower[key] = row
@@ -144,7 +148,7 @@ class AudienceData:
     def lookup(self, segment: str) -> AudienceRow:
         """Exact segment match (case-insensitive). Fail loud if missing."""
         name = segment.strip()
-        row = self._by_lower.get(name.lower())
+        row = self._by_lower.get(_fold_name(name))
         if row is None:
             raise ValueError(
                 f"No Audience Data row for segment {name!r} "

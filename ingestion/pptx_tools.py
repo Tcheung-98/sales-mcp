@@ -1,16 +1,15 @@
-"""Guardrailed PPTX helpers for skeleton assembly and (later) Cursor stylist apply.
+"""Guardrailed PPTX helpers for skeleton assembly and placeholder fills.
 
-Clone/delete stay on DeckGenerator; this module owns text-apply helpers so agent
-scripts can call them without importing the full generator.
-
-C2 (PI-2757) token/logo primitives live here. They are unwired from assemble_skeleton
-until a later chunk; tests call them directly.
+Clone/delete of slides stay on DeckGenerator; this module owns text-apply,
+logo insert, and investment-box clone so fills can run without importing
+the full generator.
 """
 
 from __future__ import annotations
 
 import io
 import re
+from copy import deepcopy
 
 from pptx.enum.shapes import MSO_SHAPE_TYPE, PP_PLACEHOLDER
 from pptx.oxml.ns import qn
@@ -125,6 +124,45 @@ def _shape_text(shape) -> str:
     return "\n".join(p.text or "" for p in shape.text_frame.paragraphs)
 
 
+def _replace_token_in_paragraph(para, token: str, text: str, *, limit: int | None) -> int:
+    """Replace ``token`` in one paragraph. ``limit`` is max replacements (None = all)."""
+    remaining = limit
+    hits = 0
+    run_hit = False
+    for run in para.runs:
+        if remaining is not None and remaining <= 0:
+            return hits
+        if token not in run.text:
+            continue
+        n = run.text.count(token)
+        if remaining is not None:
+            n = min(n, remaining)
+            run.text = run.text.replace(token, text, n)
+            remaining -= n
+        else:
+            run.text = run.text.replace(token, text)
+        hits += n
+        run_hit = True
+    if run_hit:
+        return hits
+    full = para.text or ""
+    if token not in full:
+        return 0
+    n = full.count(token)
+    if remaining is not None:
+        n = min(n, remaining)
+        new = full.replace(token, text, n)
+    else:
+        new = full.replace(token, text)
+    if para.runs:
+        para.runs[0].text = new
+        for run in para.runs[1:]:
+            run.text = ""
+    else:
+        para.text = new
+    return n
+
+
 def replace_token(slide, token: str, text: str) -> int:
     """Replace exact ``token`` substrings in all text frames. Returns hit count.
 
@@ -139,29 +177,59 @@ def replace_token(slide, token: str, text: str) -> int:
         if not getattr(shape, "has_text_frame", False):
             continue
         for para in shape.text_frame.paragraphs:
-            run_hit = False
-            for run in para.runs:
-                if token not in run.text:
-                    continue
-                n = run.text.count(token)
-                run.text = run.text.replace(token, text)
-                hits += n
-                run_hit = True
-            if run_hit:
-                continue
-            full = para.text or ""
-            if token not in full:
-                continue
-            n = full.count(token)
-            new = full.replace(token, text)
-            if para.runs:
-                para.runs[0].text = new
-                for run in para.runs[1:]:
-                    run.text = ""
-            else:
-                para.text = new
-            hits += n
+            hits += _replace_token_in_paragraph(para, token, text, limit=None)
     return hits
+
+
+def replace_first_token(slide, token: str, text: str) -> int:
+    """Replace the first ``token`` on the slide (document order). Returns 0 or 1."""
+    if not token:
+        raise ValueError("token must be non-empty")
+    for shape in iter_shapes(slide):
+        if not getattr(shape, "has_text_frame", False):
+            continue
+        for para in shape.text_frame.paragraphs:
+            n = _replace_token_in_paragraph(para, token, text, limit=1)
+            if n:
+                return n
+    return 0
+
+
+def clone_shape_below(slide, shape, extra_top_emu: int):
+    """Deep-copy ``shape`` on the same slide, shifted down by ``extra_top_emu``.
+
+    Used to repeat the Investment category text box once per funded divider.
+    Fails loud if the shape has no position transform to copy.
+    """
+    if extra_top_emu <= 0:
+        raise ValueError("Investment category box clone failed: offset must be positive")
+    src = shape._element
+    new_el = deepcopy(src)
+    used: set[int] = set()
+    for el in slide._element.iter(qn("p:cNvPr")):
+        try:
+            used.add(int(el.get("id", 0)))
+        except (TypeError, ValueError):
+            pass
+    nv = new_el.find(qn("p:nvSpPr"))
+    cnv = None if nv is None else nv.find(qn("p:cNvPr"))
+    if cnv is None:
+        raise ValueError("Investment category box clone failed: missing shape id")
+    cnv.set("id", str(max(used, default=0) + 1))
+
+    sp_pr = new_el.find(qn("p:spPr"))
+    xfrm = None if sp_pr is None else sp_pr.find(qn("a:xfrm"))
+    off = None if xfrm is None else xfrm.find(qn("a:off"))
+    if off is None or off.get("y") is None:
+        raise ValueError("Investment category box clone failed: missing position")
+    off.set("y", str(int(off.get("y")) + extra_top_emu))
+
+    slide._element.cSld.spTree.append(new_el)
+    slide.__dict__.pop("shapes", None)
+    for candidate in slide.shapes:
+        if candidate._element is new_el:
+            return candidate
+    raise ValueError("Investment category box clone failed: clone not on slide")
 
 
 def _is_picture_placeholder(shape) -> bool:

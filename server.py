@@ -116,7 +116,9 @@ def build_deck(schema: dict, template_url: str | None = None) -> dict:
 
     Uploads to S3 and returns a presigned download URL valid for 24h.
     Missing/ambiguous map rows or unmapped categories fail loud — no Titan
-    substitute. Skeleton only — no LLM placeholder fills (C2) or stylist.
+    substitute. Deterministic C2 fills run after assembly (date, logo, history,
+    audience Reach/Index, program labels, investment). AI copy tokens remain
+    until Chunk 5. No stylist.
     """
     try:
         parsed = DeckSchema.model_validate(schema)
