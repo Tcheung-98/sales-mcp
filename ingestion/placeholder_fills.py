@@ -45,7 +45,7 @@ PRODUCT_TYPE_LITERAL = "PRODUCT TYPE"
 PRODUCT_DESCRIPTION_LITERAL = "Product description."
 CLIENT_NAME_UPPER_TOKEN = "[CLIENT NAME]"
 EM_DASH = "\u2014"
-_TOTAL_LABEL = re.compile(r"total", re.I)
+_TOTAL_LABEL = re.compile(r"\btotal\b", re.I)
 _INVESTMENT_CLONE_GAP_EMU = 200_000
 
 # 1-category Program Overview: second box is stock, not a second AI blurb.
@@ -71,7 +71,7 @@ def mix_total(schema: DeckSchema) -> float:
 
 
 def stated_total_budget(schema: DeckSchema) -> float:
-    """Seller stated total: labeled /total/i tier, else max of budgets[].amount."""
+    """Seller stated total: a tier labeled with the word total, else max of budgets[].amount."""
     labeled = [
         tier for tier in schema.budgets if tier.label and _TOTAL_LABEL.search(tier.label)
     ]

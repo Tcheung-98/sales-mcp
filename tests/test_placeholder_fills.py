@@ -93,6 +93,19 @@ def test_stated_total_budget_prefers_total_label():
     assert stated_total_budget(schema) == 50_000
 
 
+def test_stated_total_budget_ignores_subtotal_label():
+    schema = _schema(
+        budgets=[
+            {"amount": 10_000, "label": "Subtotal"},
+            {"amount": 50_000, "label": "Newsletter"},
+        ],
+        confirmed_products=[
+            Product(name="CEO Daily", cadence="weekly", price=50_000, category="Newsletter")
+        ],
+    )
+    assert stated_total_budget(schema) == 50_000
+
+
 def test_apply_fills_date_logo_history_leaves_ai_and_why_fortune():
     prs = build_fortuneai_fixture_prs()
     warnings = _apply(prs)
