@@ -13,6 +13,7 @@ import io
 import re
 
 from pptx.enum.shapes import MSO_SHAPE_TYPE, PP_PLACEHOLDER
+from pptx.oxml.ns import qn
 
 # FortuneAI History of Trust / Audience possessive tokens use U+2019.
 APOS = "\u2019"
@@ -223,3 +224,15 @@ def insert_logo(slide, image_bytes: bytes) -> None:
         placeholder.insert_picture(io.BytesIO(image_bytes))
     except Exception as exc:
         raise ValueError(f"logo image is unreadable: {exc}") from exc
+
+
+def delete_slide(prs, slide_idx: int) -> None:
+    """Remove a slide by 0-based index (sldIdLst + relationship)."""
+    n = len(prs.slides)
+    if slide_idx < 0 or slide_idx >= n:
+        raise ValueError(f"slide index {slide_idx} out of range (0..{n - 1})")
+    sld_id_lst = prs.slides._sldIdLst
+    sld_id = sld_id_lst[slide_idx]
+    r_id = sld_id.get(qn("r:id"))
+    prs.part.drop_rel(r_id)
+    sld_id_lst.remove(sld_id)

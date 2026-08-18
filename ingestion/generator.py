@@ -34,7 +34,7 @@ from ingestion.gtm_product_map import (
     load_gtm_product_map_from_s3,
     product_deck_s3_key,
 )
-from ingestion.pptx_tools import apply_replacements, set_ph_text
+from ingestion.pptx_tools import apply_replacements, delete_slide, set_ph_text
 from ingestion.schema import DeckSchema
 
 logger = logging.getLogger(__name__)
@@ -188,11 +188,7 @@ class DeckGenerator:
 
     @staticmethod
     def _delete_slide(prs: PresentationType, slide_idx: int) -> None:
-        sld_id_lst = prs.slides._sldIdLst
-        sld_id = sld_id_lst[slide_idx]
-        r_id = sld_id.get(qn("r:id"))
-        prs.part.drop_rel(r_id)
-        sld_id_lst.remove(sld_id)
+        delete_slide(prs, slide_idx)
 
     @staticmethod
     def _insert_slide_at(prs: PresentationType, position: int) -> None:
