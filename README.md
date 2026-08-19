@@ -168,21 +168,46 @@ Energy, Lifestyle, Luxury. Legacy `Tech` normalizes to `Technology`. Legacy
 `budget_quarterly` still shims to a single budget tier. Escalation uses the max tier amount
 (≥ $750k → GTM).
 
-**Skeleton assembly (C1 / PI-2756)** — `build_deck(schema, template_url?)` validates the handoff
-and always assembles from **FortuneAI_DeckTemplate** (not industry `Category_Presentation_*`).
-Optional `template_url` must name FortuneAI_DeckTemplate (SharePoint download URL); when omitted,
-the template loads from S3 (`FORTUNEAI_TEMPLATE_KEY`). Keeps intro / narrative / investment /
-thank-you stock (placeholder fills are C2). Inserts category dividers **only when ≥1 funded
-product** maps to that section (fixed order: High-Impact Media → Editorial Alignment →
-Premium Video → Print → Branded Content). Product pages under each divider are **exact** GTM
-Product Tags clones (`Deck Path` + `Slide #`). Events / Conference products fail loud (GTM
-escalate). Missing or ambiguous map rows fail loud (no Titan substitute). Clone lives in
-`DeckGenerator.assemble_skeleton` (Anthropic-free). Skeleton only — no LLM copy or stylist.
+**FortuneAI assembly + C2 fills (C1 / PI-2756 + C2 / PI-2757)** — `build_deck(schema, template_url?)`
+validates the handoff and assembles from **FortuneAI_DeckTemplate** (not industry
+`Category_Presentation_*`). Optional `template_url` must name FortuneAI_DeckTemplate
+(SharePoint download URL); when omitted, the template loads from S3
+(`FORTUNEAI_TEMPLATE_KEY`). **C1** (`assemble_skeleton`, Anthropic-free): keeps intro /
+narrative / investment / thank-you stock layout; inserts category dividers **only when ≥1
+funded product** maps to that section (fixed order: High-Impact Media → Editorial Alignment →
+Premium Video → Print → Branded Content); product pages under each divider are **exact** GTM
+Product Tags clones (`Deck Path` + `Slide #`). **C2** (`apply_placeholders` after assembly):
+fills date/logo/history/audience metrics/program types/investment/thanks, bounded Claude for
+named narrative slots, drops unused audience/program variant pages. Events / Conference products
+fail loud (GTM escalate). Missing or ambiguous map rows fail loud (no Titan substitute). No
+stylist (PI-2754 shelved).
 
-**GTM product slide map (A5 / PI-2541)** — Product pages are deterministic. Sync the Hunter
-workbook and decks it names into S3 before build:
+**Per-slide fill method (FortuneAI stock spine, pre-product insert):**
 
-- Sheet: `sites/dream_team/.../Fortune Hunter/Fortune_AITool_GTM_Database.xlsx` → Product Tags
+| Slide role | Method | Source |
+|---|---|---|
+| Intro | AI + data + logo | Claude `[TITLE]`; generate-time Month/Year `[DATE]`; HTTPS `client_logo` |
+| Why Fortune | Stock | Unchanged |
+| History of Trust | Stock + swap | `[client name]` → `company_name` |
+| Opportunity | AI | Claude `[HEADER]` + `[BODY]` |
+| Audience (one variant kept) | AI + data | Claude `[AUDIENCE TITLE]`; Reach/Index from Audience Data |
+| Program Overview (one variant kept) | AI + data | Divider names as `PRODUCT TYPE`; Claude program blurbs (1-category: second box is stock Fortune sentence) |
+| Category dividers | Stock (C1) | Conditional insert only |
+| Product pages | Master Deck Pull (A5) | Exact GTM `Deck Path` + `Slide #` clone |
+| Investment | Data pull + math | Mix sum `[BUDGET]`; per-category bullets; budget mismatch fails loud |
+| Thank You | Stock + data + logo | Same date/logo as intro |
+
+**GTM workbook (A5 + C2)** — sync the Hunter workbook and decks it names into S3 before build:
+
+- Object: `GTM_DATABASE_KEY` (default `templates/Fortune_AITool_GTM_Database.xlsx`)
+- **Product Tags** sheet → exact product slide map (A5)
+- **Audience Data** sheet → segment / Reach / Index for audience cards (C2); matched via
+  `targeting_details`; never invent metrics
+
+Product Tags lookup and Audience Data load are separate passes over the same xlsx.
+
+**GTM product slide map (A5 / PI-2541)** — Product pages are deterministic:
+
 - Lookup: exact `Product Name` + `Product Category` (schema aliases: `Newsletter`→`Newsletters`,
   `Digital Media`→`Digital Ads/Programmatic`)
 - Binaries: `product-decks/{Deck Path}` (adds `.pptx` when the sheet omits the extension)
