@@ -11,6 +11,8 @@ import argparse
 import io
 import re
 import sys
+
+import requests
 from dotenv import load_dotenv
 from pptx import Presentation
 
