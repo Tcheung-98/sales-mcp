@@ -126,6 +126,7 @@ def _run_live() -> int:
     schema = _schema()
     result = gen.build(schema, logo_bytes=MINIMAL_PNG)
     print("build result:", {k: result[k] for k in result if k != "download_url"})
+    print("download_url:", result["download_url"])
     resp = requests.get(result["download_url"], timeout=60)
     resp.raise_for_status()
     prs = Presentation(io.BytesIO(resp.content))
