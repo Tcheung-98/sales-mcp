@@ -14,6 +14,7 @@ from ingestion.schema import DeckSchema, Product
 from tests.fortuneai_placeholder_fixture import (
     MINIMAL_PNG,
     fortuneai_fixture_bytes,
+    mock_placeholder_ai,
     sample_audience_data,
 )
 
@@ -67,7 +68,15 @@ def _build_generator() -> DeckGenerator:
         generator = DeckGenerator(bucket="test-bucket")
     generator._s3 = MagicMock()
     generator._blank_bytes = _blank_bytes(slide_count=6)
+    generator._api_key = "test-key"
     return generator
+
+
+def _patch_build_ai():
+    return patch(
+        "ingestion.generator.PlaceholderAI.from_anthropic",
+        return_value=mock_placeholder_ai(),
+    )
 
 
 def _build_schema(**overrides) -> DeckSchema:
@@ -422,6 +431,7 @@ def test_build_happy_path_returns_payload():
     with (
         patch("requests.get") as mock_get,
         patch.object(generator, "_load_pptx", return_value=source_prs) as mock_load,
+        _patch_build_ai(),
     ):
         mock_get.return_value.content = fortuneai_fixture_bytes()
         mock_get.return_value.raise_for_status = MagicMock()
@@ -672,7 +682,10 @@ def test_build_loads_fortuneai_from_s3_when_url_omitted():
 
     generator._s3.get_object.side_effect = _get_object
 
-    with patch.object(generator, "_load_pptx", return_value=source_prs) as mock_load:
+    with (
+        patch.object(generator, "_load_pptx", return_value=source_prs) as mock_load,
+        _patch_build_ai(),
+    ):
         result = generator.build(
             schema,
             template_url=None,
@@ -699,6 +712,7 @@ def test_build_delegates_to_assemble_skeleton():
     with (
         patch.object(generator, "assemble_skeleton", return_value=mock_prs) as mock_assemble,
         patch("ingestion.generator.apply_placeholders", return_value=[]),
+        _patch_build_ai(),
     ):
         result = generator.build(
             schema,
@@ -744,6 +758,7 @@ def test_build_leaves_product_clone_title_untouched():
     with (
         patch("requests.get") as mock_get,
         patch.object(generator, "_load_pptx", return_value=source_prs),
+        _patch_build_ai(),
     ):
         mock_get.return_value.content = fortuneai_fixture_bytes()
         mock_get.return_value.raise_for_status = MagicMock()
