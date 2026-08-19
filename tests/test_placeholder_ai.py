@@ -69,6 +69,17 @@ def test_validate_short_title_all_caps():
     validate_short_title("ACME CORP PARTNERSHIP", all_caps=True, slot="Intro title")
 
 
+def test_validate_short_title_rejects_all_caps_for_sentence_case():
+    with pytest.raises(ValueError, match="sentence case"):
+        validate_short_title("LEAD THE FUTURE NOW", sentence_case=True, slot="Header")
+
+
+def test_opportunity_header_rejects_all_caps_from_caller():
+    caller, _ = _recording_caller(["LEAD THE FUTURE NOW", "Lead The Future Now"])
+    ai = PlaceholderAI(caller)
+    assert ai.opportunity_header(_schema()) == "Lead The Future Now"
+
+
 def test_validate_short_title_rejects_em_dash():
     with pytest.raises(ValueError, match="em dash"):
         validate_short_title("Lead — Now", slot="Header")
@@ -154,9 +165,9 @@ def test_call_succeeds_on_second_attempt():
 def test_from_anthropic_wraps_client():
     mock_client = MagicMock()
     mock_block = MagicMock()
-    mock_block.text = "SHAPE THE FUTURE NOW"
+    mock_block.text = "Lead The Future Now"
     mock_client.messages.create.return_value.content = [mock_block]
     ai = PlaceholderAI.from_anthropic(mock_client, model="claude-test")
     title = ai.opportunity_header(_schema())
-    assert title == "SHAPE THE FUTURE NOW"
+    assert title == "Lead The Future Now"
     mock_client.messages.create.assert_called_once()

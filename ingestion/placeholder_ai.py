@@ -234,7 +234,9 @@ class PlaceholderAI:
             self._caller,
             system=system,
             user=user,
-            validate=lambda t: validate_short_title(t, slot="Opportunity header"),
+            validate=lambda t: validate_short_title(
+                t, sentence_case=True, slot="Opportunity header"
+            ),
             slot="Opportunity header",
             max_tokens=64,
         )
