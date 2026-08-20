@@ -1,8 +1,8 @@
-"""Deterministic FortuneAI placeholder fills (C2). No Claude.
+"""FortuneAI placeholder fills (C2).
 
-Wired from DeckGenerator.build after assemble_skeleton. Leaves AI tokens
-([TITLE], [HEADER], [BODY], [AUDIENCE TITLE], Program one-liners) for Chunk 5.
-Never rewrites A5 product clones or Why Fortune stock copy.
+Wired from DeckGenerator.build after assemble_skeleton: deterministic fills
+first, then bounded Claude slots when ``ai`` is provided. Never rewrites A5
+product clones or Why Fortune stock copy.
 """
 
 from __future__ import annotations
@@ -10,6 +10,7 @@ from __future__ import annotations
 import logging
 import re
 from datetime import date
+from typing import TYPE_CHECKING
 from urllib.parse import urlparse
 
 import requests
@@ -33,8 +34,15 @@ from ingestion.pptx_tools import (
 )
 from ingestion.schema import DeckSchema, Product
 
+if TYPE_CHECKING:
+    from ingestion.placeholder_ai import PlaceholderAI
+
 logger = logging.getLogger(__name__)
 
+TITLE_TOKEN = "[TITLE]"
+HEADER_TOKEN = "[HEADER]"
+BODY_TOKEN = "[BODY]"
+AUDIENCE_TITLE_TOKEN = "[AUDIENCE TITLE]"
 DATE_TOKEN = "[DATE]"
 AUDIENCE_SEGMENT_TOKEN = "[AUDIENCE SEGMENT]"
 REACH_TOKEN = "[REACH]"
@@ -121,6 +129,7 @@ def apply_placeholders(
     audience: AudienceData,
     logo_bytes: bytes,
     as_of: date | None = None,
+    ai: PlaceholderAI | None = None,
 ) -> list[str]:
     """Fill stock FortuneAI slots on an assembled skeleton. Returns warnings."""
     warnings: list[str] = []
@@ -165,13 +174,100 @@ def apply_placeholders(
     _require_replace(thanks, DATE_TOKEN, date_text, what="Thank You")
     insert_logo(thanks, logo_bytes)
 
+    if ai is not None:
+        _fill_ai_placeholders(
+            prs,
+            schema,
+            ai,
+            audience_idx=audience_choice.keep_index,
+            program_idx=program_choice.keep_index,
+            audience_segments=[row.segment for row in rows],
+            program_categories=program_names,
+            funded_category_count=len(divider_names),
+        )
+
     delete_unused_variants(
         prs,
         audience_keep=audience_choice.keep_index,
         program_keep=program_choice.keep_index,
     )
-    logger.info("applied deterministic placeholders; %d warning(s)", len(warnings))
+    logger.info("applied placeholders; %d warning(s)", len(warnings))
     return warnings
+
+
+def _fill_ai_placeholders(
+    prs,
+    schema: DeckSchema,
+    ai: PlaceholderAI,
+    *,
+    audience_idx: int,
+    program_idx: int,
+    audience_segments: list[str],
+    program_categories: list[str],
+    funded_category_count: int,
+) -> None:
+    """Bounded Claude fills on role-tagged spine slides only."""
+    intro = prs.slides[0]
+    _require_replace(
+        intro, TITLE_TOKEN, ai.intro_title(schema), what="Intro"
+    )
+
+    opp = prs.slides[3]
+    _require_replace(
+        opp, HEADER_TOKEN, ai.opportunity_header(schema), what="Opportunity"
+    )
+    _require_replace(
+        opp, BODY_TOKEN, ai.opportunity_body(schema), what="Opportunity"
+    )
+
+    audience = prs.slides[audience_idx]
+    _require_replace(
+        audience,
+        AUDIENCE_TITLE_TOKEN,
+        ai.audience_title(schema, audience_segments),
+        what="Audience",
+    )
+
+    program = prs.slides[program_idx]
+    _fill_program_ai_blurbs(
+        program,
+        schema,
+        ai,
+        program_categories,
+        funded_category_count=funded_category_count,
+    )
+
+
+def _fill_program_ai_blurbs(
+    slide,
+    schema: DeckSchema,
+    ai: PlaceholderAI,
+    categories: list[str],
+    *,
+    funded_category_count: int,
+) -> None:
+    desc_shapes = [
+        shape
+        for shape in iter_shapes(slide)
+        if PRODUCT_DESCRIPTION_LITERAL in _shape_text(shape)
+    ]
+    if not desc_shapes:
+        raise ValueError("Program Overview has no Product description. boxes")
+
+    if funded_category_count == 1:
+        blurb = ai.program_blurb(schema, categories[0])
+        _set_paragraph_text(desc_shapes[0].text_frame.paragraphs[0], blurb)
+        return
+
+    if len(desc_shapes) < len(categories):
+        raise ValueError(
+            "Program Overview needs "
+            f"{len(categories)} Product description. boxes; "
+            f"found {len(desc_shapes)}"
+        )
+    for shape, category in zip(desc_shapes[: len(categories)], categories, strict=True):
+        blurb = ai.program_blurb(schema, category)
+        _set_paragraph_text(shape.text_frame.paragraphs[0], blurb)
 
 
 def _assert_budget_matches_mix(schema: DeckSchema) -> None:

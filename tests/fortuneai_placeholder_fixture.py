@@ -8,6 +8,7 @@ dividers, investment, thanks. Intro/thanks use a picture placeholder labeled
 from __future__ import annotations
 
 import io
+from unittest.mock import MagicMock
 
 from pptx import Presentation
 from pptx.enum.shapes import PP_PLACEHOLDER
@@ -38,12 +39,41 @@ def sample_audience_data() -> AudienceData:
         ]
     )
 
+# Valid Opportunity body for mocked AI fills in placeholder tests (~85 words).
+SAMPLE_OPPORTUNITY_BODY = (
+    "Enterprise buyers are skeptical of vendor claims and generic advertising noise. "
+    "Acme Corp can stand out by aligning with editorial environments CFOs trust "
+    "for business insight daily. Finance leaders seek credible partners who "
+    "understand modernization without hype in complex markets today. Engaging them "
+    "requires authority, context, and relevance rather than interruptive formats "
+    "alone across channels. Fortune delivers authority through newsletters, live "
+    "experiences, and premium brand storytelling trusted by executives worldwide. "
+    "Acme can lead the category conversation by showing up where decisions happen. "
+    "Fortune connects your message to the executives shaping the future of business."
+)
+
+SAMPLE_PROGRAM_BLURB = (
+    "Fortune newsletters connect Acme with decision-makers through trusted "
+    "weekly editorial environments and strategic insight daily."
+)
+
+
 WHY_FORTUNE_STOCK = "FORTUNE POWERS THE LEADING MINDS IN BUSINESS"
 HISTORY_BODY = (
     f"In a fractured media landscape, that trust is Fortune{APOS}s edge — "
     f"and {CLIENT_NAME_TOKEN}{APOS}s opportunity to show up on a platform "
     "trusted by the leaders who are changing the world."
 )
+
+
+def mock_placeholder_ai() -> MagicMock:
+    ai = MagicMock()
+    ai.intro_title.return_value = "ACME CORP ENTERPRISE PARTNERSHIP"
+    ai.opportunity_header.return_value = "Lead With Confidence Today"
+    ai.opportunity_body.return_value = SAMPLE_OPPORTUNITY_BODY
+    ai.audience_title.return_value = "Reach enterprise leaders"
+    ai.program_blurb.return_value = SAMPLE_PROGRAM_BLURB
+    return ai
 
 
 def _add_textbox(slide, text: str, *, top_in: float = 1.0) -> None:

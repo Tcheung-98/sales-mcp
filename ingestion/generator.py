@@ -35,6 +35,7 @@ from ingestion.gtm_product_map import (
     load_gtm_product_map_from_s3,
     product_deck_s3_key,
 )
+from ingestion.placeholder_ai import PlaceholderAI
 from ingestion.placeholder_fills import apply_placeholders, fetch_logo_bytes
 from ingestion.pptx_tools import apply_replacements, delete_slide, set_ph_text
 from ingestion.schema import DeckSchema
@@ -576,14 +577,14 @@ class DeckGenerator:
         audience_data: AudienceData | None = None,
         logo_bytes: bytes | None = None,
     ) -> dict:
-        """Assemble FortuneAI PPTX, fill deterministic placeholders, upload.
+        """Assemble FortuneAI PPTX, fill placeholders, upload.
 
         template_url: optional pre-authenticated SharePoint download URL for
         FortuneAI_DeckTemplate. When omitted, loads from S3 (FORTUNEAI_TEMPLATE_KEY).
-        Product pages use exact GTM Deck Path / Slide #. Deterministic C2 fills
-        (date, logo, history, audience Reach/Index, program types, investment).
-        AI tokens ([TITLE], Opportunity, audience title, program blurbs) stay
-        until Chunk 5. No stylist.
+        Product pages use exact GTM Deck Path / Slide #. C2 fills date, logo,
+        history, audience Reach/Index, program types, investment, and bounded
+        Claude copy for intro, Opportunity, audience title, and program blurbs.
+        No stylist.
         """
         prs = self.assemble_skeleton(schema, template_url, product_map=product_map)
         audience = (
@@ -592,8 +593,12 @@ class DeckGenerator:
         logo = (
             logo_bytes if logo_bytes is not None else fetch_logo_bytes(schema.client_logo)
         )
+        ai = PlaceholderAI.from_anthropic(
+            anthropic.Anthropic(api_key=self._get_api_key()),
+            model=self._model,
+        )
         warnings = apply_placeholders(
-            prs, schema, audience=audience, logo_bytes=logo
+            prs, schema, audience=audience, logo_bytes=logo, ai=ai
         )
         buf = io.BytesIO()
         prs.save(buf)

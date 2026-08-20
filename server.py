@@ -105,7 +105,8 @@ def get_slide_content(deck_id: str, slide_numbers: list[int] | None = None) -> l
 @mcp.tool()
 def build_deck(schema: dict, template_url: str | None = None) -> dict:
     """
-    Assemble a skeleton Fortune pitch deck from a confirmed schema.
+    Assemble a Fortune pitch deck from a confirmed schema (C1 spine + C2 fills).
+
     Always uses FortuneAI_DeckTemplate as the Creation spine (intro / narrative /
     conditional category dividers / investment / thank you). Product pages are
     exact GTM Product Tags clones (Deck Path + Slide #).
@@ -114,11 +115,20 @@ def build_deck(schema: dict, template_url: str | None = None) -> dict:
     FortuneAI_DeckTemplate.pptx (SharePoint). When omitted, the template is loaded
     from S3 (FORTUNEAI_TEMPLATE_KEY, default templates/FortuneAI_DeckTemplate.pptx).
 
-    Uploads to S3 and returns a presigned download URL valid for 24h.
-    Missing/ambiguous map rows or unmapped categories fail loud — no Titan
-    substitute. Deterministic C2 fills run after assembly (date, logo, history,
-    audience Reach/Index, program labels, investment). AI copy tokens remain
-    until Chunk 5. No stylist.
+    After assembly, C2 fills run: date, logo, history client name, audience
+    Reach/Index (Audience Data sheet), program category labels, investment blocks,
+    thank-you date/logo, bounded Claude copy for intro title, Opportunity
+    header/body, audience title, and program one-liners. Unused audience/program
+    variant pages are dropped. No stylist (PI-2754 shelved).
+
+    Uploads to S3 and returns a presigned download URL (24h) plus optional
+    warnings[] (e.g. >6 audience segments truncated to the 6-card page).
+
+    Fail loud (status: error): missing/ambiguous GTM Product Tags row, unmapped
+    category, unreadable client_logo (HTTPS required), <2 audience segment matches,
+    matched segment missing from Audience Data, stated budget vs mix total mismatch,
+    investment category box clone failure, AI validation failure after retry.
+    Missing/ambiguous map rows never fall back to Titan/RAG substitute.
     """
     try:
         parsed = DeckSchema.model_validate(schema)

@@ -19,8 +19,11 @@ from ingestion.placeholder_fills import (
 from ingestion.schema import DeckSchema, Product
 from tests.fortuneai_placeholder_fixture import (
     MINIMAL_PNG,
+    SAMPLE_OPPORTUNITY_BODY,
+    SAMPLE_PROGRAM_BLURB,
     WHY_FORTUNE_STOCK,
     build_fortuneai_fixture_prs,
+    mock_placeholder_ai,
     sample_audience_data,
 )
 
@@ -106,7 +109,7 @@ def test_stated_total_budget_ignores_subtotal_label():
     assert stated_total_budget(schema) == 50_000
 
 
-def test_apply_fills_date_logo_history_leaves_ai_and_why_fortune():
+def test_apply_without_ai_leaves_ai_tokens_and_why_fortune():
     prs = build_fortuneai_fixture_prs()
     warnings = _apply(prs)
     assert warnings == []
@@ -127,13 +130,37 @@ def test_apply_fills_date_logo_history_leaves_ai_and_why_fortune():
     assert "[DATE]" not in thanks
 
 
+def test_apply_with_ai_fills_named_slots_and_leaves_why_fortune():
+    prs = build_fortuneai_fixture_prs()
+    ai = mock_placeholder_ai()
+    _apply(prs, ai=ai)
+    intro = _slide_blob(prs.slides[0])
+    assert "ACME CORP ENTERPRISE PARTNERSHIP" in intro
+    assert "[TITLE]" not in intro
+    assert WHY_FORTUNE_STOCK in _slide_blob(prs.slides[1])
+    opp = _slide_blob(prs.slides[3])
+    assert "Lead With Confidence Today" in opp
+    assert SAMPLE_OPPORTUNITY_BODY in opp
+    assert "[HEADER]" not in opp
+    assert "[BODY]" not in opp
+    audience_pages = [s for s in prs.slides if "Reach enterprise leaders" in _slide_blob(s)]
+    assert len(audience_pages) == 1
+    assert "[AUDIENCE TITLE]" not in _slide_blob(audience_pages[0])
+    program_pages = [s for s in prs.slides if "PROGRAM OVERVIEW" in _slide_blob(s)]
+    assert SAMPLE_PROGRAM_BLURB in _slide_blob(program_pages[0])
+    ai.intro_title.assert_called_once()
+    ai.opportunity_body.assert_called_once()
+
+
 def test_apply_keeps_only_3_card_audience_and_pulls_metrics_verbatim():
     prs = build_fortuneai_fixture_prs()
-    _apply(prs)
-    audience_pages = [s for s in prs.slides if "[AUDIENCE TITLE]" in _slide_blob(s)]
+    _apply(prs, ai=mock_placeholder_ai())
+    audience_pages = [
+        s for s in prs.slides if "Chief Executive Officer" in _slide_blob(s)
+    ]
     assert len(audience_pages) == 1
     blob = _slide_blob(audience_pages[0])
-    assert "[AUDIENCE TITLE]" in blob
+    assert "[AUDIENCE TITLE]" not in blob
     assert "Chief Executive Officer" in blob
     assert "C-suite" in blob
     assert "Chief Financial Officer" in blob
@@ -149,13 +176,14 @@ def test_apply_keeps_only_3_card_audience_and_pulls_metrics_verbatim():
 
 def test_apply_1_category_program_second_box_is_stock():
     prs = build_fortuneai_fixture_prs()
-    _apply(prs)
+    _apply(prs, ai=mock_placeholder_ai())
     program_pages = [s for s in prs.slides if "PROGRAM OVERVIEW" in _slide_blob(s)]
     assert len(program_pages) == 1
     blob = _slide_blob(program_pages[0])
     assert "Editorial Alignment" in blob
     assert "Fortune" in blob
-    assert blob.count("Product description.") == 1
+    assert blob.count("Product description.") == 0
+    assert SAMPLE_PROGRAM_BLURB in blob
     assert PROGRAM_STOCK_BLURB in blob
     assert "PRODUCT TYPE" not in blob
 
@@ -172,7 +200,7 @@ def test_apply_investment_two_categories_divider_order():
             ),
         ],
     )
-    _apply(prs, schema)
+    _apply(prs, schema, ai=mock_placeholder_ai())
     blob = _slide_blob(prs.slides[-2])
     assert format_usd(30_000) in blob
     assert "[BUDGET]" not in blob
@@ -186,14 +214,14 @@ def test_apply_budget_mismatch_raises():
     prs = build_fortuneai_fixture_prs()
     schema = _schema(budgets=[{"amount": 100_000}])
     with pytest.raises(ValueError, match="does not match mix total"):
-        _apply(prs, schema)
+        _apply(prs, schema, ai=mock_placeholder_ai())
 
 
 def test_apply_lt_2_audience_raises():
     prs = build_fortuneai_fixture_prs()
     schema = _schema(targeting_details="US enterprise tech decision-makers")
     with pytest.raises(ValueError, match="at least 2"):
-        _apply(prs, schema)
+        _apply(prs, schema, ai=mock_placeholder_ai())
 
 
 def test_apply_gt_6_audience_warns_and_keeps_6_card():
@@ -205,10 +233,12 @@ def test_apply_gt_6_audience_warns_and_keeps_6_card():
             "Chief Data Officer, Active Investor, Wealthy (HNW)"
         )
     )
-    warnings = _apply(prs, schema)
+    warnings = _apply(prs, schema, ai=mock_placeholder_ai())
     assert warnings
     assert "top 6" in warnings[0]
-    audience_pages = [s for s in prs.slides if "[AUDIENCE TITLE]" in _slide_blob(s)]
+    audience_pages = [
+        s for s in prs.slides if "Chief Technology Officer" in _slide_blob(s)
+    ]
     assert len(audience_pages) == 1
     blob = _slide_blob(audience_pages[0])
     # Truncated by Index desc: CTO 255, CDO 219, CIO 207, C-suite 172, CEO 154, CFO 146
