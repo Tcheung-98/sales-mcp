@@ -36,6 +36,40 @@ def _pricing_xlsx(rows: list[tuple]) -> bytes:
     return buf.getvalue()
 
 
+def _formatted_pricing_xlsx() -> bytes:
+    """SharePoint-style section blocks (column B product, column C pricing)."""
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Pricing + Benchmarks"
+    rows = [
+        (None, "DIGITAL MEDIA"),
+        (None, "Product", "Pricing", "Benchmarks ", "Est. Imps", "Last Updated"),
+        (
+            None,
+            "Crown Unit",
+            "$41 Base CPM, $25,000 minimum",
+            "0.36%-0.50% CTR",
+            "N/A",
+            "7/22/2026",
+        ),
+        (None, "NEWSLETTERS"),
+        (None, "Product", "Pricing", "Benchmarks", "Subscribers", "Last Updated"),
+        (
+            None,
+            "Term Sheet",
+            "$6,000/day; $24,000/month, 4-day minimum in same quarter",
+            "UOR: 42.98%",
+            "107,135",
+            "7/22/2026",
+        ),
+    ]
+    for row in rows:
+        ws.append(list(row))
+    buf = io.BytesIO()
+    wb.save(buf)
+    return buf.getvalue()
+
+
 _SAMPLE_ROWS = [
     (
         "NEWSLETTERS",
@@ -97,6 +131,16 @@ def test_lookup_verbatim_pricing(pricing: InventoryPricing):
     assert row.section == "NEWSLETTERS"
     assert "$6,000/day" in row.pricing
     assert row.subscribers == "107,135"
+
+
+def test_formatted_sharepoint_layout_pricing():
+    catalog = InventoryPricing.from_xlsx_bytes(_formatted_pricing_xlsx())
+    crown = catalog.lookup("Crown Unit")
+    assert crown.section == "DIGITAL MEDIA"
+    assert "$25,000" in crown.pricing
+    term = catalog.lookup("Term Sheet")
+    assert term.section == "NEWSLETTERS"
+    assert catalog.primary_amount("Term Sheet") == 24000.0
 
 
 def test_primary_amount(pricing: InventoryPricing):

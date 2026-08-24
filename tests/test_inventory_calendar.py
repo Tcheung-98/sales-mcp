@@ -165,6 +165,42 @@ def test_registry_gated_vs_ungated(registry: InventoryProductRegistry):
     assert "CEO Daily" in registry.product_names
 
 
+def test_registry_allows_same_name_different_product_type():
+    rows = [
+        (
+            "Fortune 500",
+            "Section Front",
+            "Daily (web)",
+            date(2026, 6, 1),
+            "✓",
+            "✓",
+            "✓",
+            "✓",
+            "✓",
+            "",
+            "",
+        ),
+        (
+            "Fortune 500",
+            "Fortune List",
+            "Annual (launch→EOY)",
+            date(2026, 6, 3),
+            "",
+            "",
+            "",
+            "",
+            "",
+            "",
+            "",
+        ),
+    ]
+    reg = InventoryProductRegistry.from_xlsx_bytes(_products_xlsx(rows))
+    assert len(reg.rows_for_product("Fortune 500")) == 2
+    assert reg.is_inventory_gated("Fortune 500")
+    with pytest.raises(ValueError, match="Ambiguous Products row"):
+        reg.lookup("Fortune 500")
+
+
 def test_registry_launch_and_weekdays(registry: InventoryProductRegistry):
     row = registry.lookup("CEO Daily")
     assert row.launch_date == date(2026, 1, 1)
