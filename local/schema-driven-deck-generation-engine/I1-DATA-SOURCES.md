@@ -1,7 +1,7 @@
 # I1 — Ideation data sources (access + refresh)
 
 > **Ticket:** [PI-2759](https://fortune.atlassian.net/browse/PI-2759) · **Epic:** [PI-2755](https://fortune.atlassian.net/browse/PI-2755)  
-> **Status:** Chunk C landed (inventory by flight); Chunk D pending  
+> **Status:** I1 complete (Chunks A–D)  
 > **End-state SoT:** [`END-SCOPE-SOT.md`](END-SCOPE-SOT.md)
 
 Ideation (Logic Guide / SalesGPT brain) reads three SharePoint-owned assets. Creation already consumes part of the GTM workbook; I1 makes the **full Ideation surface** machine-readable and documents how data stays fresh.
@@ -73,12 +73,11 @@ Additional tabs may exist; I1 loaders only depend on columns documented in Chunk
 
 **Chunk C loaders:** `ingestion/inventory_calendar.py` — `InventoryProductRegistry`, `InventoryAvailability`, `InventoryCalendar.check_inventory_gate()`.
 
-SOV tabs (*Lists Availability*, *Conference Media Availability*) are not loaded in Chunk C; daily/grid rows on **Inventory** cover most Ideation candidates.
+**Chunk D loaders:** `ingestion/inventory_pricing.py` — verbatim `Pricing` + `Benchmarks`; `extract_dollar_amounts()` / `primary_amount()` for funding math. Combined entry: `ingestion/inventory_workbook.py` → `InventoryWorkbook`.
 
-| Products / Inventory columns (live workbook) |
+| Pricing + Benchmarks columns (live workbook) |
 |---|
-| Products: `Product / Placement`, `Product Type`, `Cadence`, `Launch`, `Mon`–`Sun` |
-| Inventory: `Date`, `Product / Placement`, `Product Type`, `Status`, … |
+| `Section`, `Product`, `Pricing`, `Benchmarks`, `Subscribers`, `Est. Imps`, `Conference Date`, `Line Last Updated` |
 
 ---
 
@@ -151,7 +150,7 @@ aws s3 cp "Fortune Inventory & Reservation Calendar 2026 Final.xlsx" \
 | Documented access path | **A** (this file + README + `.env.example`) |
 | Load Tags / products / audience / deck path | **B** *(Product Category + Product Tags / GTM TAGS via `gtm_ideation_catalog.py`)*; deck path + audience already in Creation |
 | Load inventory by flight | **C** (`inventory_calendar.py`) |
-| Load pricing for funding steps | D |
+| Load pricing for funding steps | **D** (`inventory_pricing.py`) |
 | Refresh/ownership note | **A** (Sync + refresh section above) |
 
 ---

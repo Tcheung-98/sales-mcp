@@ -48,7 +48,17 @@ INVENTORY_COL_PRODUCT = "Product / Placement"
 INVENTORY_COL_PRODUCT_TYPE = "Product Type"
 INVENTORY_COL_STATUS = "Status"
 
-# Chunk D — Pricing + Benchmarks tab (name locked at loader implementation)
+# Pricing + Benchmarks tab
+PRICING_COL_SECTION = "Section"
+PRICING_COL_PRODUCT = "Product"
+PRICING_COL_PRICING = "Pricing"
+PRICING_COL_BENCHMARKS = "Benchmarks"
+PRICING_COL_SUBSCRIBERS = "Subscribers"
+PRICING_COL_EST_IMPS = "Est. Imps"
+PRICING_COL_CONFERENCE_DATE = "Conference Date"
+PRICING_COL_LINE_UPDATED = "Line Last Updated"
+
+# Aliases for single-tab pricing/benchmarks (Chunk D)
 INVENTORY_SHEET_PRICING = INVENTORY_SHEET_PRICING_BENCHMARKS
 INVENTORY_SHEET_BENCHMARKS = INVENTORY_SHEET_PRICING_BENCHMARKS
 

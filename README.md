@@ -212,7 +212,8 @@ pricing from S3 snapshots (SharePoint is human SoT). Access path, sheet contract
 and env defaults: [`local/schema-driven-deck-generation-engine/I1-DATA-SOURCES.md`](local/schema-driven-deck-generation-engine/I1-DATA-SOURCES.md).
 Canonical keys: `ingestion/ideation_data_keys.py`. **Chunk B:** `ingestion/gtm_ideation_catalog.py`
 loads Product Category + Product Tags (`GTM TAGS` column) from the same xlsx; **Chunk C:**
-`ingestion/inventory_calendar.py` loads Products + Inventory tabs for flight availability.
+`ingestion/inventory_calendar.py` loads Products + Inventory tabs for flight availability;
+**Chunk D:** `ingestion/inventory_pricing.py` + `inventory_workbook.py` for rates.
 Creation already uses Product Tags + Audience Data from `GTM_DATABASE_KEY`.
 
 **GTM product slide map (A5 / PI-2541)** — Product pages are deterministic:
