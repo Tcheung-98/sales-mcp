@@ -3,7 +3,7 @@
 > **Living file.** Update when a ticket lands or the associate flow changes.  
 > **End-state SoT (do not fork):** [`END-SCOPE-SOT.md`](END-SCOPE-SOT.md)  
 > **Agents:** `.cursor/rules/pitch-deck-end-scope.mdc` is the always-on snapshot of this + the SoT.  
-> **Last updated:** 2026-08-24 (I1 Chunk A — data access path documented)
+> **Last updated:** 2026-08-24 (I3 — associate confirm/swap → lock mix)
 
 ---
 
@@ -30,17 +30,17 @@ This is already in the Workflow spec (Discovery → Ideation → Creation). It i
 |---|---|---|
 | Form / Discovery fields | Schema + Prodie/UI | C3 done; wire PI-2350 |
 | Propose offerings | Logic Guide engine + GTM/inventory | I1, I2 |
-| Associate select/swap | Seller UX (SalesGPT / Prodie) | I3 |
+| Associate select/swap | MCP `confirm_mix`; seller UX later | I3 **done** (engine); Prodie UI PI-2350 |
 | Product slide identity | GTM Product Tags exact map | A5 done |
 | Deck body (dividers + clones) | `assemble_skeleton` | C1 landed |
 | Intro/narrative/investment/thanks fills | Placeholder pipeline | C2 **done** ([PI-2757](https://fortune.atlassian.net/browse/PI-2757), PR [#26](https://github.com/Tcheung-98/sales-mcp/pull/26)) |
 | Seller actually calls `build_deck` | Prodie | PI-2350 |
 
-C2 tests stub I3: pass `confirmed_products` as if the associate already chose.
+C2 tests may still stub `confirmed_products`. The engineer path is now `propose_mix` → `confirm_mix` → `build_deck`.
 
 ---
 
-## Progress (2026-08-19)
+## Progress (2026-08-24)
 
 | ID | Ticket | Status | Notes |
 |---|---|---|---|
@@ -48,15 +48,16 @@ C2 tests stub I3: pass `confirmed_products` as if the associate already chose.
 | C3 | PI-2758 | Done | `DiscoverySchema` + `DeckSchema` |
 | A5 | PI-2541 | Done | Exact Deck Path / Slide #; merged #23 |
 | C1 | PI-2756 | **Done** | FortuneAI spine, unfunded dividers dropped, A5 inserts; merged #24 |
-| I1 | PI-2759 | **Done** (loaders) | PR #27 — Code Review |
-| I2 | PI-2760 | In progress | Logic Guide engine scaffold on `PI-2760-logic-guide-engine` |
-| I2 | PI-2760 | Not started | Logic Guide mix engine (SalesGPT brain) |
-| I3 | PI-2761 | Not started | Associate confirm/swap → lock mix |
+| I1 | PI-2759 | **Done** | GTM + inventory + pricing loaders; [#27](https://github.com/Tcheung-98/sales-mcp/pull/27) |
+| I2 | PI-2760 | **Done** | Logic Guide V1 mix engine; [#28](https://github.com/Tcheung-98/sales-mcp/pull/28) |
+| I3 | PI-2761 | **Done** (MCP) | `propose_mix` + `confirm_mix` lock `confirmed_products`; this PR |
 | C2 | PI-2757 | **Done** | Deterministic + bounded AI fills in `build()`; [#26](https://github.com/Tcheung-98/sales-mcp/pull/26) |
-| Wire | PI-2350 | Later | Prodie form + confirm + `build_deck` |
+| Wire | PI-2350 | Later | Prodie form + confirm UI + `build_deck` |
 | Stylist | PI-2754 | Shelved | Not MVP |
 
 **Creation rail** after C2: engineer can `build_deck` with a stubbed mix and get a seller-readable PPTX (deterministic + bounded AI narrative copy). Live Claude + manual FortuneAI PPTX review recommended before prod deploy.
+
+**Associate rail** after I3: engineer can `propose_mix(discovery)` → seller edits → `confirm_mix(...)` → `build_deck(deck_schema)` without hand-building `confirmed_products`. Prodie/SalesGPT UI is still PI-2350.
 
 ---
 
@@ -65,7 +66,19 @@ C2 tests stub I3: pass `confirmed_products` as if the associate already chose.
 - **C1** — Load FortuneAI (the arc is the file). Drop unfunded category dividers. Paste A5 clones under funded chapters. Leave intro / all audience variants / all program variants / investment / thanks as stock.
 - **C2** — Fill stock slots (deterministic + bounded Claude); pick one Audience page and one Program Overview page; fill investment/thanks. Do not rewrite product clones. Do not pick the mix.
 
-**Associate rail** still needs I2 + I3 + Prodie before the form-to-deck loop is real.
+**Associate rail** still needs Prodie (PI-2350) before the form-to-deck loop is real. MCP propose → confirm → build is wired.
+
+---
+
+## I3 working notes (this cycle)
+
+- `ingestion/confirm_mix.py` — `ConfirmMixRequest`, `ProposedProduct` → `Product`, fail-loud GTM / unavailable / empty-mix checks.
+- MCP: `propose_mix` (S3 GTM + inventory → Logic Guide) and `confirm_mix` (tier pick + drop/swap/add → `DeckSchema`).
+- Escalation intakes return `{status: "escalation"}` — do not call `build_deck`.
+- Tests: `PYTHONPATH=. uv run pytest tests/test_confirm_mix.py tests/test_ideation_to_deck_integration.py tests/test_server.py -q`
+- Optional live smoke: `PYTHONPATH=. uv run python tests/smoke_ideation_to_deck.py --mock-ai` (needs `S3_SNAPSHOT_BUCKET`).
+
+**I2 follow-ups (not this ticket):** richer Logic Guide funding rules, re-run engine on swap, session persistence.
 
 ---
 

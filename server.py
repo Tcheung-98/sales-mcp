@@ -1,5 +1,6 @@
 import os
 
+import boto3
 import requests
 from mcp.server.fastmcp import FastMCP
 from mcp.server.fastmcp.server import TransportSecuritySettings
@@ -8,9 +9,19 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import JSONResponse
 from starlette.routing import Route
 
+from ingestion.confirm_mix import confirm_mix_from_dict, serialize_ideation
 from ingestion.generator import DeckGenerator
+from ingestion.gtm_ideation_catalog import (
+    GtmIdeationCatalog,
+    load_gtm_ideation_catalog_from_s3,
+)
+from ingestion.inventory_workbook import (
+    InventoryWorkbook,
+    load_inventory_workbook_from_s3,
+)
+from ingestion.logic_guide.engine import LogicGuideEngine
 from ingestion.retriever import SlideRetriever
-from ingestion.schema import BUDGET_ESCALATION_ERROR, DeckSchema
+from ingestion.schema import BUDGET_ESCALATION_ERROR, DeckSchema, DiscoverySchema
 
 _EXPECTED_TOKEN = os.environ.get("MCP_SHARED_SECRET")
 
@@ -34,6 +45,9 @@ mcp = FastMCP(
 
 _retriever: SlideRetriever | None = None
 _generator: DeckGenerator | None = None
+_ideation_gtm: GtmIdeationCatalog | None = None
+_ideation_inventory: InventoryWorkbook | None = None
+_ideation_engine: LogicGuideEngine | None = None
 
 
 def _get_retriever() -> SlideRetriever:
@@ -48,6 +62,106 @@ def _get_generator() -> DeckGenerator:
     if _generator is None:
         _generator = DeckGenerator()
     return _generator
+
+
+def _get_ideation_engine() -> LogicGuideEngine:
+    global _ideation_gtm, _ideation_inventory, _ideation_engine
+    if _ideation_engine is None:
+        s3 = boto3.client("s3")
+        bucket = os.environ["S3_SNAPSHOT_BUCKET"]
+        _ideation_gtm = load_gtm_ideation_catalog_from_s3(s3, bucket)
+        _ideation_inventory = load_inventory_workbook_from_s3(s3, bucket)
+        _ideation_engine = LogicGuideEngine(_ideation_gtm, _ideation_inventory)
+    return _ideation_engine
+
+
+def _get_ideation_catalogs() -> tuple[GtmIdeationCatalog, InventoryWorkbook]:
+    _get_ideation_engine()
+    assert _ideation_gtm is not None and _ideation_inventory is not None
+    return _ideation_gtm, _ideation_inventory
+
+
+@mcp.tool()
+def propose_mix(schema: dict) -> dict:
+    """
+    Logic Guide ideation (I2): propose funded tiers from Discovery intake.
+
+    Loads GTM Product Tags + inventory/pricing from S3, runs Logic Guide V1, and
+    returns serializable tiers with live prices. Use confirm_mix after the
+    associate selects/swaps products, then build_deck on the returned deck_schema.
+
+    Fail loud: invalid Discovery fields (status: incomplete), GTM escalation
+    platforms (status: escalation), loader errors (status: error).
+    """
+    try:
+        discovery = DiscoverySchema.model_validate(schema)
+    except ValidationError as exc:
+        missing = []
+        errors = []
+        for e in exc.errors():
+            loc = ".".join(str(p) for p in e["loc"])
+            if e["type"] == "missing":
+                missing.append(loc)
+            else:
+                errors.append(f"{loc}: {e['msg']}")
+        if any(e["type"] == BUDGET_ESCALATION_ERROR for e in exc.errors()):
+            return {"status": "escalation", "message": errors[0]}
+        return {"status": "incomplete", "missing": missing, "errors": errors}
+    try:
+        result = _get_ideation_engine().propose(discovery)
+    except (ValueError, KeyError, OSError) as exc:
+        return {"status": "error", "message": str(exc)}
+    payload = serialize_ideation(result)
+    if result.requires_gtm_escalation:
+        return {
+            "status": "escalation",
+            "escalations": list(result.escalations),
+            "ideation": payload,
+        }
+    return {
+        "status": "ok",
+        "ideation": payload,
+        "tier_count": len(result.tiers),
+        "unavailable_products": list(result.unavailable_products),
+        "notes": list(result.notes),
+    }
+
+
+@mcp.tool()
+def confirm_mix(
+    discovery: dict,
+    ideation: dict,
+    tier_index: int | None = None,
+    budget_target: float | None = None,
+    tier_label: str | None = None,
+    drop_products: list[str] | None = None,
+    swaps: list[dict] | None = None,
+    add_products: list[dict] | None = None,
+) -> dict:
+    """
+    Associate confirm/swap gate (I3): lock a tier + edits → DeckSchema.
+
+    Pass the original Discovery dict and ideation dict from propose_mix. Exactly
+    one of tier_index, budget_target, or tier_label selects the funded tier.
+    Optional drop_products (names), swaps ({from, to} with optional categories
+    for disambiguation), and add_products ({name, category?}) from GTM catalog.
+
+    Returns deck_schema ready for build_deck, confirmed_products, warnings
+    (budget/mix mismatches, ideation notes), and selected_tier summary.
+    Escalation intakes return status escalation — do not call build_deck.
+    """
+    gtm, inventory = _get_ideation_catalogs()
+    payload = {
+        "discovery": discovery,
+        "ideation": ideation,
+        "tier_index": tier_index,
+        "budget_target": budget_target,
+        "tier_label": tier_label,
+        "drop_products": drop_products or [],
+        "swaps": swaps or [],
+        "add_products": add_products or [],
+    }
+    return confirm_mix_from_dict(payload, gtm=gtm, inventory=inventory)
 
 
 @mcp.tool()

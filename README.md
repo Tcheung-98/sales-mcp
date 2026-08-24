@@ -169,6 +169,14 @@ Energy, Lifestyle, Luxury. Legacy `Tech` normalizes to `Technology`. Legacy
 `budget_quarterly` still shims to a single budget tier. Escalation uses the max tier amount
 (≥ $750k → GTM).
 
+**Ideation → Creation lock (I2 / PI-2760 + I3 / PI-2761)** — `propose_mix(schema)` loads GTM +
+inventory from S3, runs Logic Guide, and returns funded `tiers`. `confirm_mix` takes the original
+Discovery payload, that ideation dict, and exactly one of `tier_index` / `budget_target` /
+`tier_label`, plus optional `drop_products`, `swaps` (`from`/`to`), and `add_products` from the
+GTM catalog. It returns `deck_schema` with `confirmed_products` for `build_deck`. Conference /
+Lists platforms and other GTM escalations return `status: escalation` (do not build). Unavailable
+products cannot be confirmed in MVP.
+
 **FortuneAI assembly + C2 fills (C1 / PI-2756 + C2 / PI-2757)** — `build_deck(schema, template_url?)`
 validates the handoff and assembles from **FortuneAI_DeckTemplate** (not industry
 `Category_Presentation_*`). Optional `template_url` must name FortuneAI_DeckTemplate
