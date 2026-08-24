@@ -20,8 +20,14 @@ DEFAULT_INVENTORY_CALENDAR_KEY = (
 
 GTM_SHEET_PRODUCT_TAGS = "Product Tags"
 GTM_SHEET_AUDIENCE_DATA = "Audience Data"
-GTM_SHEET_GTM_TAGS = "GTM Tags"
 GTM_SHEET_PRODUCT_CATEGORY = "Product Category"
+
+# GTM tag strings for Logic Guide live on Product Tags (not a separate sheet).
+GTM_COL_PRODUCT_CATEGORY = "Product Category"
+GTM_COL_PRODUCT_NAME = "Product Name"
+GTM_COL_GTM_TAGS = "GTM TAGS"
+GTM_COL_CATEGORY_TITLE = "Title"
+GTM_COL_CATEGORY_DESCRIPTION = "Description"
 
 # --- Inventory calendar sheets ---
 

@@ -48,7 +48,7 @@ C2 tests stub I3: pass `confirmed_products` as if the associate already chose.
 | C3 | PI-2758 | Done | `DiscoverySchema` + `DeckSchema` |
 | A5 | PI-2541 | Done | Exact Deck Path / Slide #; merged #23 |
 | C1 | PI-2756 | **Done** | FortuneAI spine, unfunded dividers dropped, A5 inserts; merged #24 |
-| I1 | PI-2759 | In progress | Chunk A done (access doc + env keys); B–D loaders pending |
+| I1 | PI-2759 | In progress | Chunk A+B done (access doc + GTM catalog loaders); C–D pending |
 | I2 | PI-2760 | Not started | Logic Guide mix engine (SalesGPT brain) |
 | I3 | PI-2761 | Not started | Associate confirm/swap → lock mix |
 | C2 | PI-2757 | **Done** | Deterministic + bounded AI fills in `build()`; [#26](https://github.com/Tcheung-98/sales-mcp/pull/26) |

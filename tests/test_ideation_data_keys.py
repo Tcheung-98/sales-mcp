@@ -3,9 +3,6 @@
 from ingestion.ideation_data_keys import (
     DEFAULT_GTM_DATABASE_KEY,
     DEFAULT_INVENTORY_CALENDAR_KEY,
-    GTM_SHEET_GTM_TAGS,
-    INVENTORY_SHEET_PRICING,
-    INVENTORY_SHEET_PRODUCTS,
     gtm_database_s3_key,
     inventory_calendar_s3_key,
 )
@@ -20,7 +17,17 @@ def test_default_s3_keys():
 
 
 def test_sheet_name_constants():
-    assert GTM_SHEET_GTM_TAGS == "GTM Tags"
+    from ingestion.ideation_data_keys import (
+        GTM_COL_GTM_TAGS,
+        GTM_SHEET_PRODUCT_CATEGORY,
+        GTM_SHEET_PRODUCT_TAGS,
+        INVENTORY_SHEET_PRICING,
+        INVENTORY_SHEET_PRODUCTS,
+    )
+
+    assert GTM_SHEET_PRODUCT_TAGS == "Product Tags"
+    assert GTM_SHEET_PRODUCT_CATEGORY == "Product Category"
+    assert GTM_COL_GTM_TAGS == "GTM TAGS"
     assert INVENTORY_SHEET_PRODUCTS == "Products"
     assert INVENTORY_SHEET_PRICING == "Pricing"
 

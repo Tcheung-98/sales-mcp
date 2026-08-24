@@ -1,7 +1,7 @@
 # I1 — Ideation data sources (access + refresh)
 
 > **Ticket:** [PI-2759](https://fortune.atlassian.net/browse/PI-2759) · **Epic:** [PI-2755](https://fortune.atlassian.net/browse/PI-2755)  
-> **Status:** Chunk A (access path + env conventions) — loaders in Chunks B–D  
+> **Status:** Chunk B landed (GTM catalog loaders); Chunks C–D pending  
 > **End-state SoT:** [`END-SCOPE-SOT.md`](END-SCOPE-SOT.md)
 
 Ideation (Logic Guide / SalesGPT brain) reads three SharePoint-owned assets. Creation already consumes part of the GTM workbook; I1 makes the **full Ideation surface** machine-readable and documents how data stays fresh.
@@ -57,10 +57,9 @@ This repo **consumes** snapshots. It does **not** edit inventory, pricing, or GT
 
 | Sheet | Consumer today | I1 / I2 use |
 |---|---|---|
-| **Product Tags** | A5 Creation (`gtm_product_map.py`) | Deck Path + Slide # (unchanged) |
+| **Product Tags** | A5 Creation (`gtm_product_map.py`) | Deck Path + Slide #; **GTM TAGS** column = Logic Guide candidate pool (Chunk B) |
 | **Audience Data** | C2 Creation (`audience_data.py`) | Reach / Index (unchanged) |
-| **GTM Tags** | — | Logic Guide candidate pool, trigger phrases |
-| **Product Category** | — | Category rules, defaults, caps |
+| **Product Category** | Chunk B (`gtm_ideation_catalog.py`) | Category display titles + descriptions |
 
 Additional tabs may exist; I1 loaders only depend on columns documented in Chunks B–D.
 
@@ -143,7 +142,7 @@ aws s3 cp "Fortune Inventory & Reservation Calendar 2026 Final.xlsx" \
 | AC | Chunk |
 |---|---|
 | Documented access path | **A** (this file + README + `.env.example`) |
-| Load Tags / products / audience / deck path | B *(GTM Tags + catalog)*; deck path + audience already in Creation |
+| Load Tags / products / audience / deck path | **B** *(Product Category + Product Tags / GTM TAGS via `gtm_ideation_catalog.py`)*; deck path + audience already in Creation |
 | Load inventory by flight | C |
 | Load pricing for funding steps | D |
 | Refresh/ownership note | **A** (Sync + refresh section above) |
