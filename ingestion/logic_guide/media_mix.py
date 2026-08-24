@@ -77,7 +77,15 @@ def fund_tier(
     funded: list[PricedCandidate] = []
     pool = list(priced)
 
-    def add(item: PricedCandidate | None) -> bool:
+    def add_mandatory(item: PricedCandidate | None) -> bool:
+        nonlocal remaining
+        if item is None or item in funded:
+            return False
+        funded.append(item)
+        remaining -= item.product.price
+        return True
+
+    def add_optional(item: PricedCandidate | None) -> bool:
         nonlocal remaining
         if item is None or item in funded:
             return False
@@ -88,38 +96,50 @@ def fund_tier(
         return True
 
     if _DIGITAL_CATEGORY in selected_gtm_categories:
-        add(_digital_anchor(discovery, pool))
+        add_mandatory(_digital_anchor(discovery, pool))
 
     if _NEWSLETTERS_CATEGORY in selected_gtm_categories:
         news = _by_gtm(pool, _NEWSLETTERS_CATEGORY)
-        add(_pick_most_expensive(news) or _pick_cheapest(news))
+        add_mandatory(_pick_most_expensive(news) or _pick_cheapest(news))
 
     if _VODCASTS_CATEGORY in selected_gtm_categories:
         vod = _by_gtm(pool, _VODCASTS_CATEGORY)
-        add(_pick_most_expensive(vod) or _pick_cheapest(vod))
+        add_mandatory(_pick_most_expensive(vod) or _pick_cheapest(vod))
 
     if _BC_CATEGORY in selected_gtm_categories:
         bc = _by_gtm(pool, _BC_CATEGORY)
-        video_pool = [c for c in bc if "video" in c.product.name.casefold()]
+        _BC_VIDEO_NAMES = frozenset(
+            {
+                "Executive Q&A (Remote)",
+                "Documentary-Style Video",
+                "Hosted Interview Video (Remote)",
+            }
+        )
+        video_pool = [
+            c
+            for c in bc
+            if c.product.name in _BC_VIDEO_NAMES
+            or "video" in c.product.name.casefold()
+        ]
         written_pool = [c for c in bc if c not in video_pool]
-        add(_pick_most_expensive(video_pool))
-        add(_pick_most_expensive(written_pool))
+        add_mandatory(_pick_most_expensive(video_pool))
+        add_mandatory(_pick_most_expensive(written_pool))
 
     if _PRINT_CATEGORY in selected_gtm_categories:
-        add(_find_named(pool, "Full Page"))
+        add_mandatory(_find_named(pool, "Full Page"))
 
     # Simple digital backfill: Scroller if ≥$25k left, else Crown top-up, else Display.
     if _DIGITAL_CATEGORY in selected_gtm_categories and remaining > 0:
         digital = _by_gtm(pool, _DIGITAL_CATEGORY)
         if remaining >= 25_000:
-            add(_find_named(digital, "Scroller Unit"))
+            add_optional(_find_named(digital, "Scroller Unit"))
         if remaining > 0:
             crown = _find_named(digital, "Crown Unit")
             if crown and crown not in funded and crown.product.price <= remaining:
-                add(crown)
+                add_optional(crown)
         if remaining > 0:
             for name in _DISPLAY_BACKFILL:
-                add(_find_named(digital, name))
+                add_optional(_find_named(digital, name))
 
     products = tuple(c.product for c in funded)
     total = sum(p.price for p in products)
