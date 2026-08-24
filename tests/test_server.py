@@ -2,8 +2,10 @@ from unittest.mock import MagicMock
 
 from server import (
     build_deck,
+    confirm_mix,
     filter_decks_by_tags,
     get_slide_content,
+    propose_mix,
     search_decks,
 )
 
@@ -142,3 +144,61 @@ def test_filter_decks_by_tags_delegates_to_retriever(mocker):
         client_name=None, date_from=None, date_to=None, deck_type="Pitch", limit=5,
     )
     assert results == fake_results
+
+
+def test_propose_mix_delegates_to_engine(mocker):
+    from ingestion.logic_guide.models import IdeationResult, ProposedProduct, TierProposal
+
+    tier = TierProposal(
+        budget_target=50_000.0,
+        label=None,
+        products=(
+            ProposedProduct(
+                name="CEO Daily",
+                category="Newsletter",
+                gtm_category="Newsletters",
+                price=50_000.0,
+                pricing_text="$5k/day",
+            ),
+        ),
+        total=50_000.0,
+    )
+    mock_engine = MagicMock()
+    mock_engine.propose.return_value = IdeationResult(tiers=[tier])
+    mocker.patch("server._get_ideation_engine", return_value=mock_engine)
+    result = propose_mix(schema=_valid_schema())
+    assert result["status"] == "ok"
+    assert result["tier_count"] == 1
+    mock_engine.propose.assert_called_once()
+
+
+def test_propose_mix_escalation(mocker):
+    from ingestion.logic_guide.models import IdeationResult
+
+    mock_engine = MagicMock()
+    mock_engine.propose.return_value = IdeationResult(
+        escalations=["Conference requires GTM escalation"]
+    )
+    mocker.patch("server._get_ideation_engine", return_value=mock_engine)
+    result = propose_mix(schema=_valid_schema())
+    assert result["status"] == "escalation"
+    assert result["escalations"]
+
+
+def test_confirm_mix_delegates(mocker):
+    fake = {
+        "status": "ok",
+        "deck_schema": _valid_schema(),
+        "warnings": [],
+        "confirmed_products": _valid_schema()["confirmed_products"],
+        "selected_tier": {"budget_target": 50_000.0},
+    }
+    mocker.patch("server._get_ideation_catalogs", return_value=(MagicMock(), MagicMock()))
+    mocker.patch("server.confirm_mix_from_dict", return_value=fake)
+    result = confirm_mix(
+        discovery=_valid_schema(),
+        ideation={"tiers": [], "escalations": [], "unavailable_products": [], "notes": []},
+        tier_index=0,
+    )
+    assert result["status"] == "ok"
+    assert result["deck_schema"]["company_name"] == "Acme Corp"
