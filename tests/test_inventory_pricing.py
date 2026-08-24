@@ -44,7 +44,14 @@ def _formatted_pricing_xlsx() -> bytes:
     rows = [
         (None, "DIGITAL MEDIA"),
         (None, "Product", "Pricing", "Benchmarks ", "Est. Imps", "Last Updated"),
-        (None, "Crown Unit", "$41 Base CPM, $25,000 minimum", "0.36%-0.50% CTR", "N/A", "7/22/2026"),
+        (
+            None,
+            "Crown Unit",
+            "$41 Base CPM, $25,000 minimum",
+            "0.36%-0.50% CTR",
+            "N/A",
+            "7/22/2026",
+        ),
         (None, "NEWSLETTERS"),
         (None, "Product", "Pricing", "Benchmarks", "Subscribers", "Last Updated"),
         (
