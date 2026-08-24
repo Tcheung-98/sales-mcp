@@ -32,8 +32,25 @@ GTM_COL_CATEGORY_DESCRIPTION = "Description"
 # --- Inventory calendar sheets ---
 
 INVENTORY_SHEET_PRODUCTS = "Products"
-INVENTORY_SHEET_PRICING = "Pricing"
-INVENTORY_SHEET_BENCHMARKS = "Benchmarks"
+INVENTORY_SHEET_INVENTORY = "Inventory"
+INVENTORY_SHEET_PRICING_BENCHMARKS = "Pricing + Benchmarks"
+
+# Products tab (inventory-gated placement catalog)
+PRODUCTS_COL_PRODUCT = "Product / Placement"
+PRODUCTS_COL_PRODUCT_TYPE = "Product Type"
+PRODUCTS_COL_CADENCE = "Cadence"
+PRODUCTS_COL_LAUNCH = "Launch"
+PRODUCTS_DAY_COLUMNS = ("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")
+
+# Inventory tab (dated availability grid)
+INVENTORY_COL_DATE = "Date"
+INVENTORY_COL_PRODUCT = "Product / Placement"
+INVENTORY_COL_PRODUCT_TYPE = "Product Type"
+INVENTORY_COL_STATUS = "Status"
+
+# Chunk D — Pricing + Benchmarks tab (name locked at loader implementation)
+INVENTORY_SHEET_PRICING = INVENTORY_SHEET_PRICING_BENCHMARKS
+INVENTORY_SHEET_BENCHMARKS = INVENTORY_SHEET_PRICING_BENCHMARKS
 
 
 def gtm_database_s3_key(key: str | None = None) -> str:

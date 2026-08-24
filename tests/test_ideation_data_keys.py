@@ -21,7 +21,8 @@ def test_sheet_name_constants():
         GTM_COL_GTM_TAGS,
         GTM_SHEET_PRODUCT_CATEGORY,
         GTM_SHEET_PRODUCT_TAGS,
-        INVENTORY_SHEET_PRICING,
+        INVENTORY_SHEET_INVENTORY,
+        INVENTORY_SHEET_PRICING_BENCHMARKS,
         INVENTORY_SHEET_PRODUCTS,
     )
 
@@ -29,7 +30,8 @@ def test_sheet_name_constants():
     assert GTM_SHEET_PRODUCT_CATEGORY == "Product Category"
     assert GTM_COL_GTM_TAGS == "GTM TAGS"
     assert INVENTORY_SHEET_PRODUCTS == "Products"
-    assert INVENTORY_SHEET_PRICING == "Pricing"
+    assert INVENTORY_SHEET_INVENTORY == "Inventory"
+    assert INVENTORY_SHEET_PRICING_BENCHMARKS == "Pricing + Benchmarks"
 
 
 def test_resolved_keys_from_env(monkeypatch):

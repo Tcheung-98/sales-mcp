@@ -1,7 +1,7 @@
 # I1 — Ideation data sources (access + refresh)
 
 > **Ticket:** [PI-2759](https://fortune.atlassian.net/browse/PI-2759) · **Epic:** [PI-2755](https://fortune.atlassian.net/browse/PI-2755)  
-> **Status:** Chunk B landed (GTM catalog loaders); Chunks C–D pending  
+> **Status:** Chunk C landed (inventory by flight); Chunk D pending  
 > **End-state SoT:** [`END-SCOPE-SOT.md`](END-SCOPE-SOT.md)
 
 Ideation (Logic Guide / SalesGPT brain) reads three SharePoint-owned assets. Creation already consumes part of the GTM workbook; I1 makes the **full Ideation surface** machine-readable and documents how data stays fresh.
@@ -67,11 +67,18 @@ Additional tabs may exist; I1 loaders only depend on columns documented in Chunk
 
 | Sheet | I1 / I2 use |
 |---|---|
-| **Products** | Sold/held/available vs seller flight dates. **Rule:** product not listed here → **no inventory gate** (e.g. non-takeover digital, branded content). |
-| **Pricing** | Rates for Logic Guide funding / media-mix steps |
-| **Benchmarks** | Reference pricing where Logic Guide needs benchmarks |
+| **Products** | Master list of **inventory-gated** placements (`Product / Placement`, type, cadence, launch, weekday flags). Not on this tab → **no inventory gate**. |
+| **Inventory** | Dated grid: `Status` = Available / Held / Sold / Holiday per product × date. Cross-reference seller `flight_dates` here. |
+| **Pricing + Benchmarks** | Rates for Logic Guide funding (Chunk D) |
 
-Exact column names are locked when Chunk C/D loaders land (fixture-driven).
+**Chunk C loaders:** `ingestion/inventory_calendar.py` — `InventoryProductRegistry`, `InventoryAvailability`, `InventoryCalendar.check_inventory_gate()`.
+
+SOV tabs (*Lists Availability*, *Conference Media Availability*) are not loaded in Chunk C; daily/grid rows on **Inventory** cover most Ideation candidates.
+
+| Products / Inventory columns (live workbook) |
+|---|
+| Products: `Product / Placement`, `Product Type`, `Cadence`, `Launch`, `Mon`–`Sun` |
+| Inventory: `Date`, `Product / Placement`, `Product Type`, `Status`, … |
 
 ---
 
@@ -143,7 +150,7 @@ aws s3 cp "Fortune Inventory & Reservation Calendar 2026 Final.xlsx" \
 |---|---|
 | Documented access path | **A** (this file + README + `.env.example`) |
 | Load Tags / products / audience / deck path | **B** *(Product Category + Product Tags / GTM TAGS via `gtm_ideation_catalog.py`)*; deck path + audience already in Creation |
-| Load inventory by flight | C |
+| Load inventory by flight | **C** (`inventory_calendar.py`) |
 | Load pricing for funding steps | D |
 | Refresh/ownership note | **A** (Sync + refresh section above) |
 

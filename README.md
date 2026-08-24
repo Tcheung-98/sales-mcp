@@ -211,8 +211,9 @@ Product Tags lookup and Audience Data load are separate passes over the same xls
 pricing from S3 snapshots (SharePoint is human SoT). Access path, sheet contract, sync/ownership,
 and env defaults: [`local/schema-driven-deck-generation-engine/I1-DATA-SOURCES.md`](local/schema-driven-deck-generation-engine/I1-DATA-SOURCES.md).
 Canonical keys: `ingestion/ideation_data_keys.py`. **Chunk B:** `ingestion/gtm_ideation_catalog.py`
-loads Product Category + Product Tags (`GTM TAGS` column) from the same xlsx; Creation
-already uses Product Tags + Audience Data from `GTM_DATABASE_KEY`.
+loads Product Category + Product Tags (`GTM TAGS` column) from the same xlsx; **Chunk C:**
+`ingestion/inventory_calendar.py` loads Products + Inventory tabs for flight availability.
+Creation already uses Product Tags + Audience Data from `GTM_DATABASE_KEY`.
 
 **GTM product slide map (A5 / PI-2541)** — Product pages are deterministic:
 
