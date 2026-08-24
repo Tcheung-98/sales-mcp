@@ -135,19 +135,20 @@ class InventoryProductRegistry:
 
     def __init__(self, rows: list[InventoryProductRow]) -> None:
         self._rows = rows
-        self._by_name: dict[str, InventoryProductRow] = {}
+        self._by_name: dict[str, list[InventoryProductRow]] = {}
         for row in rows:
             key = _fold_name(row.product_name)
-            existing = self._by_name.get(key)
-            if existing is not None and (
-                existing.product_type != row.product_type
-                or existing.cadence != row.cadence
-            ):
-                raise ValueError(
-                    f"Duplicate Products row for {row.product_name!r} with "
-                    f"conflicting metadata"
-                )
-            self._by_name[key] = row
+            bucket = self._by_name.setdefault(key, [])
+            for existing in bucket:
+                if (
+                    existing.product_type == row.product_type
+                    and existing.cadence == row.cadence
+                ):
+                    raise ValueError(
+                        f"Duplicate Products row for {row.product_name!r} "
+                        f"({row.product_type!r})"
+                    )
+            bucket.append(row)
 
     @classmethod
     def from_xlsx_bytes(cls, data: bytes) -> InventoryProductRegistry:
@@ -199,17 +200,26 @@ class InventoryProductRegistry:
         return cls(parsed)
 
     def is_inventory_gated(self, product_name: str) -> bool:
-        return _fold_name(product_name) in self._by_name
+        return bool(self.rows_for_product(product_name))
+
+    def rows_for_product(self, product_name: str) -> list[InventoryProductRow]:
+        return list(self._by_name.get(_fold_name(product_name), []))
 
     def lookup(self, product_name: str) -> InventoryProductRow:
         name = product_name.strip()
-        row = self._by_name.get(_fold_name(name))
-        if row is None:
+        matches = self.rows_for_product(name)
+        if not matches:
             raise ValueError(
                 f"No Products tab row for placement {name!r} "
                 "(exact Product / Placement match required)"
             )
-        return row
+        if len(matches) > 1:
+            types = sorted({row.product_type for row in matches})
+            raise ValueError(
+                f"Ambiguous Products row for {name!r}: "
+                f"multiple product types ({types})"
+            )
+        return matches[0]
 
     @property
     def product_names(self) -> list[str]:
@@ -330,8 +340,12 @@ class InventoryCalendar:
         if not self.products.is_inventory_gated(product_name):
             return InventoryGateResult.NOT_GATED
 
-        product = self.products.lookup(product_name)
-        if product.launch_date is not None and flight_end < product.launch_date:
+        launches = [
+            row.launch_date
+            for row in self.products.rows_for_product(product_name)
+            if row.launch_date is not None
+        ]
+        if launches and flight_end < min(launches):
             return InventoryGateResult.NOT_LAUNCHED
 
         slots = self.availability.slots_in_flight(
