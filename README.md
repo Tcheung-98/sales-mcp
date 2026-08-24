@@ -34,6 +34,7 @@ cp .env.example .env
 | `MCP_SHARED_SECRET` | Bearer token for Cowork → MCP auth |
 | `RULEBOOK_KEY` | S3 key for Fortune GTM skill doc (default: `templates/rulebook.docx`) |
 | `GTM_DATABASE_KEY` | S3 key for `Fortune_AITool_GTM_Database.xlsx` (default: `templates/Fortune_AITool_GTM_Database.xlsx`) |
+| `INVENTORY_CALENDAR_KEY` | S3 key for inventory + pricing workbook (default: `templates/Fortune_Inventory_Reservation_Calendar_2026_Final.xlsx`) |
 | `PRODUCT_DECKS_PREFIX` | S3 prefix for Hunter product decks referenced by Deck Path (default: `product-decks/`) |
 | `FORTUNEAI_TEMPLATE_KEY` | S3 key for Creation spine (default: `templates/FortuneAI_DeckTemplate.pptx`) |
 | `TEMPLATE_URL_ALLOWED_HOSTS` | Optional extra hosts for `build_deck` template URLs (comma-separated) |
@@ -205,6 +206,15 @@ stylist (PI-2754 shelved).
   `targeting_details`; never invent metrics
 
 Product Tags lookup and Audience Data load are separate passes over the same xlsx.
+
+**Ideation data sources (I1 / PI-2759)** — Logic Guide reads GTM DB + inventory calendar +
+pricing from S3 snapshots (SharePoint is human SoT). Access path, sheet contract, sync/ownership,
+and env defaults: [`local/schema-driven-deck-generation-engine/I1-DATA-SOURCES.md`](local/schema-driven-deck-generation-engine/I1-DATA-SOURCES.md).
+Canonical keys: `ingestion/ideation_data_keys.py`. **Chunk B:** `ingestion/gtm_ideation_catalog.py`
+loads Product Category + Product Tags (`GTM TAGS` column) from the same xlsx; **Chunk C:**
+`ingestion/inventory_calendar.py` loads Products + Inventory tabs for flight availability;
+**Chunk D:** `ingestion/inventory_pricing.py` + `inventory_workbook.py` for rates.
+Creation already uses Product Tags + Audience Data from `GTM_DATABASE_KEY`.
 
 **GTM product slide map (A5 / PI-2541)** — Product pages are deterministic:
 
