@@ -161,14 +161,15 @@ class DeckGenerator:
         ctx = getattr(target_prs, "_clone_import_ctx", None)
         if ctx is None:
             ctx = {"package": target_prs.part.package, "taken": set(), "layouts": {}}
-            target_prs._clone_import_ctx = ctx
+            setattr(target_prs, "_clone_import_ctx", ctx)
         ctx["taken"] |= {part.partname for part in ctx["package"].iter_parts()}
         return ctx
 
     @staticmethod
     def _alloc_partname(ctx: dict, source_partname) -> PackURI:
         stem = source_partname.filename.rsplit(".", 1)[0]
-        prefix = re.match(r"[A-Za-z_]*", stem).group() or "part"
+        match = re.match(r"[A-Za-z_]*", stem)
+        prefix = (match.group() if match is not None else "") or "part"
         n = 1
         while True:
             candidate = PackURI(

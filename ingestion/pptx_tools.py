@@ -362,7 +362,11 @@ def sync_sections(prs) -> None:
     if section_lst is None:
         return
 
-    order = [sld_id.get("id") for sld_id in prs.slides._sldIdLst]
+    order: list[str] = []
+    for sld_id in prs.slides._sldIdLst:
+        slide_id = sld_id.get("id")
+        if slide_id is not None:
+            order.append(slide_id)
     live = set(order)
 
     sections = []
@@ -373,11 +377,13 @@ def sync_sections(prs) -> None:
             continue
         sections.append((section, id_lst))
 
-    owner = {}
+    owner: dict[str, int] = {}
     for index, (_, id_lst) in enumerate(sections):
         for entry in id_lst:
-            if entry.get("id") in live:
-                owner.setdefault(entry.get("id"), index)
+            slide_id = entry.get("id")
+            if slide_id in live:
+                assert slide_id is not None
+                owner.setdefault(slide_id, index)
 
     assignment: dict[str, int] = {}
     current = 0
