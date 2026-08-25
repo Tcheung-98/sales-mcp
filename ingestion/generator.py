@@ -3,6 +3,7 @@ import io
 import json
 import logging
 import os
+import re
 from urllib.parse import urlparse
 from uuid import uuid4
 
@@ -13,6 +14,8 @@ from docx import Document
 from lxml import etree
 from pptx import Presentation
 from pptx.opc.constants import RELATIONSHIP_TYPE as RT
+from pptx.opc.package import Part, XmlPart
+from pptx.opc.packuri import PackURI
 from pptx.oxml import parse_xml
 from pptx.oxml.ns import qn
 from pptx.presentation import Presentation as PresentationType
@@ -37,7 +40,12 @@ from ingestion.gtm_product_map import (
 )
 from ingestion.placeholder_ai import PlaceholderAI
 from ingestion.placeholder_fills import apply_placeholders, fetch_logo_bytes
-from ingestion.pptx_tools import apply_replacements, delete_slide, set_ph_text
+from ingestion.pptx_tools import (
+    apply_replacements,
+    delete_slide,
+    set_ph_text,
+    sync_sections,
+)
 from ingestion.schema import DeckSchema
 
 logger = logging.getLogger(__name__)
@@ -48,6 +56,9 @@ _COST_PER_M_INPUT = 3.00
 _COST_PER_M_OUTPUT = 15.00
 
 _TEMPLATE_URL_HOST_SUFFIXES = (".sharepoint.com", ".sharepoint.us", ".microsoft.com")
+
+_RELS_NS = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
+_PML_NS = "http://schemas.openxmlformats.org/presentationml/2006/main"
 
 
 _SYSTEM_PROMPT_TEMPLATE = """\
@@ -140,6 +151,187 @@ class DeckGenerator:
         self._audience_data: AudienceData | None = None
 
     @staticmethod
+    def _import_ctx(target_prs: PresentationType) -> dict:
+        """Per-target bookkeeping for parts pulled in from other packages.
+
+        ``next_partname`` only sees parts already reachable from the package
+        root, so track allocations ourselves; ``layouts`` keeps repeat clones of
+        one source layout from importing a fresh master each time.
+        """
+        ctx = getattr(target_prs, "_clone_import_ctx", None)
+        if ctx is None:
+            ctx = {"package": target_prs.part.package, "taken": set(), "layouts": {}}
+            setattr(target_prs, "_clone_import_ctx", ctx)
+        ctx["taken"] |= {part.partname for part in ctx["package"].iter_parts()}
+        return ctx
+
+    @staticmethod
+    def _alloc_partname(ctx: dict, source_partname) -> PackURI:
+        stem = source_partname.filename.rsplit(".", 1)[0]
+        match = re.match(r"[A-Za-z_]*", stem)
+        prefix = (match.group() if match is not None else "") or "part"
+        n = 1
+        while True:
+            candidate = PackURI(
+                f"{source_partname.baseURI}/{prefix}{n}.{source_partname.ext}"
+            )
+            if candidate not in ctx["taken"]:
+                ctx["taken"].add(candidate)
+                return candidate
+            n += 1
+
+    @staticmethod
+    def _importable_part(target_prs: PresentationType, source_part):
+        """Return a binary part safe to relate into ``target_prs``.
+
+        Product decks and FortuneAI share media partnames (``image63.png``,
+        ``hdphoto40.wdp``, …). Relating the source part directly would emit two
+        zip entries under one partname, so copy the blob to a free partname
+        whenever the name is already taken.
+        """
+        ctx = DeckGenerator._import_ctx(target_prs)
+        if source_part.partname not in ctx["taken"]:
+            ctx["taken"].add(source_part.partname)
+            return source_part
+        return Part(
+            DeckGenerator._alloc_partname(ctx, source_part.partname),
+            source_part.content_type,
+            ctx["package"],
+            source_part.blob,
+        )
+
+    @staticmethod
+    def _copy_xml_part(ctx: dict, source_part) -> XmlPart:
+        # Keep the source's own part class (SlideLayoutPart, SlideMasterPart, …)
+        # so the copy still answers python-pptx's object-model traversals. Parts
+        # python-pptx has no class for — themes — load blob-backed, so read them
+        # as generic XML instead.
+        source_cls = type(source_part)
+        part_cls = source_cls if issubclass(source_cls, XmlPart) else XmlPart
+        return part_cls(
+            DeckGenerator._alloc_partname(ctx, source_part.partname),
+            source_part.content_type,
+            ctx["package"],
+            parse_xml(source_part.blob),
+        )
+
+    @staticmethod
+    def _import_slide_layout(target_prs: PresentationType, source_layout):
+        """Copy ``source_layout`` — plus its master and theme — into ``target_prs``.
+
+        Cloned product slides keep placeholders, and placeholders inherit font,
+        size, colour and bullet formatting from their layout/master/theme. Point
+        them at a FortuneAI layout instead and the slide silently restyles, so
+        bring the real chain along. The copied master is pruned to just this
+        layout, which keeps the import to roughly the layout's own weight.
+        """
+        ctx = DeckGenerator._import_ctx(target_prs)
+        cache_key = id(source_layout.part)
+        if cache_key in ctx["layouts"]:
+            return ctx["layouts"][cache_key]
+
+        src_layout_part = source_layout.part
+        src_master_part = source_layout.slide_master.part
+
+        master_part = DeckGenerator._copy_xml_part(ctx, src_master_part)
+        master_map: dict[str, str] = {}
+        for rId, rel in src_master_part.rels.items():
+            # Layout list is rebuilt below so the copy carries only what we need.
+            if rel.reltype == RT.SLIDE_LAYOUT:
+                continue
+            if rel.is_external:
+                master_map[rId] = master_part.relate_to(
+                    rel.target_ref, rel.reltype, is_external=True
+                )
+            elif rel.reltype == RT.THEME:
+                master_map[rId] = master_part.relate_to(
+                    DeckGenerator._import_theme(target_prs, ctx, rel.target_part),
+                    rel.reltype,
+                )
+            else:
+                master_map[rId] = master_part.relate_to(
+                    DeckGenerator._importable_part(target_prs, rel.target_part),
+                    rel.reltype,
+                )
+
+        layout_part = DeckGenerator._copy_xml_part(ctx, src_layout_part)
+        layout_map: dict[str, str] = {}
+        for rId, rel in src_layout_part.rels.items():
+            if rel.reltype == RT.SLIDE_MASTER:
+                layout_map[rId] = layout_part.relate_to(master_part, rel.reltype)
+            elif rel.is_external:
+                layout_map[rId] = layout_part.relate_to(
+                    rel.target_ref, rel.reltype, is_external=True
+                )
+            else:
+                layout_map[rId] = layout_part.relate_to(
+                    DeckGenerator._importable_part(target_prs, rel.target_part),
+                    rel.reltype,
+                )
+        DeckGenerator._remap_rids(layout_part._element, layout_map)
+
+        DeckGenerator._remap_rids(master_part._element, master_map)
+        layout_id_lst = master_part._element.find(qn("p:sldLayoutIdLst"))
+        if layout_id_lst is None:
+            raise ValueError(
+                f"slide master {src_master_part.partname} has no sldLayoutIdLst"
+            )
+        for child in list(layout_id_lst):
+            layout_id_lst.remove(child)
+        layout_id_lst.append(
+            parse_xml(
+                f'<p:sldLayoutId xmlns:p="{_PML_NS}" xmlns:r="{_RELS_NS}" '
+                f'id="2147483649" r:id="{master_part.relate_to(layout_part, RT.SLIDE_LAYOUT)}"/>'
+            )
+        )
+
+        master_id_lst = target_prs.part._element.find(qn("p:sldMasterIdLst"))
+        existing = [int(e.get("id")) for e in master_id_lst if e.get("id")]
+        master_id_lst.append(
+            parse_xml(
+                f'<p:sldMasterId xmlns:p="{_PML_NS}" xmlns:r="{_RELS_NS}" '
+                f'id="{max(existing, default=2147483648) + 1}" '
+                f'r:id="{target_prs.part.relate_to(master_part, RT.SLIDE_MASTER)}"/>'
+            )
+        )
+
+        ctx["layouts"][cache_key] = layout_part
+        return layout_part
+
+    @staticmethod
+    def _import_theme(target_prs: PresentationType, ctx: dict, source_theme_part):
+        theme_part = DeckGenerator._copy_xml_part(ctx, source_theme_part)
+        theme_map: dict[str, str] = {}
+        for rId, rel in source_theme_part.rels.items():
+            if rel.is_external:
+                theme_map[rId] = theme_part.relate_to(
+                    rel.target_ref, rel.reltype, is_external=True
+                )
+            else:
+                theme_map[rId] = theme_part.relate_to(
+                    DeckGenerator._importable_part(target_prs, rel.target_part),
+                    rel.reltype,
+                )
+        DeckGenerator._remap_rids(theme_part._element, theme_map)
+        return theme_part
+
+    @staticmethod
+    def _remap_rids(element, rId_map: dict[str, str]) -> None:
+        """Rewrite every relationship-namespace attribute (r:embed, r:id, r:link, …).
+
+        Single pass over attributes: sequential string replacement would corrupt
+        the mapping whenever a new rId collides with an old one still unwritten.
+        """
+        prefix = f"{{{_RELS_NS}}}"
+        for el in element.iter():
+            for attr in list(el.keys()):
+                if not attr.startswith(prefix):
+                    continue
+                new_rId = rId_map.get(el.get(attr))
+                if new_rId is not None:
+                    el.set(attr, new_rId)
+
+    @staticmethod
     def _clone_slide(
         source_prs: PresentationType, slide_idx: int, target_prs: PresentationType
     ):
@@ -148,25 +340,31 @@ class DeckGenerator:
         # Add a placeholder slide — gives us a proper slide part + sldIdLst entry
         new_slide = target_prs.slides.add_slide(target_prs.slide_layouts[0])
 
-        # Register slide-level image parts from source into target; build rId map
+        # Carry every source relationship except the layout (rewired below) and
+        # notes (deliberately dropped). Copying only images leaves hyperlinks,
+        # hdphoto sidecars and media as dangling r:ids, which makes PowerPoint
+        # declare the deck corrupt and "repair" it on open.
         rId_map: dict[str, str] = {}
         for rId, rel in source_slide.part.rels.items():
-            if "image" in rel.reltype:
-                image_part = source_slide.part.related_part(rId)
-                new_rId = new_slide.part.relate_to(image_part, rel.reltype)
-                rId_map[rId] = new_rId
+            if rel.reltype in (RT.SLIDE_LAYOUT, RT.NOTES_SLIDE):
+                continue
+            if rel.is_external:
+                new_rId = new_slide.part.relate_to(
+                    rel.target_ref, rel.reltype, is_external=True
+                )
+            else:
+                new_rId = new_slide.part.relate_to(
+                    DeckGenerator._importable_part(
+                        target_prs, source_slide.part.related_part(rId)
+                    ),
+                    rel.reltype,
+                )
+            rId_map[rId] = new_rId
 
-        # Serialize source cSld, rewire rIds, re-parse with pptx element classes
-        # (parse_xml, not etree.fromstring, so spTree and other pptx attrs are available)
-        cSld_xml = etree.tostring(source_slide._element.cSld)
-        for old_rId, new_rId in rId_map.items():
-            cSld_xml = cSld_xml.replace(
-                f'r:embed="{old_rId}"'.encode(), f'r:embed="{new_rId}"'.encode()
-            )
-            cSld_xml = cSld_xml.replace(
-                f'r:link="{old_rId}"'.encode(), f'r:link="{new_rId}"'.encode()
-            )
-        fixed_cSld = parse_xml(cSld_xml)
+        # Serialize source cSld and re-parse with pptx element classes (parse_xml,
+        # not etree.fromstring, so spTree and other pptx attrs are available)
+        fixed_cSld = parse_xml(etree.tostring(source_slide._element.cSld))
+        DeckGenerator._remap_rids(fixed_cSld, rId_map)
 
         # Swap target slide's cSld with the fixed clone
         tgt_sld = new_slide._element
@@ -176,17 +374,17 @@ class DeckGenerator:
         # gets a fresh SlideShapes pointing at the new spTree, not the discarded one
         new_slide.__dict__.pop("shapes", None)
 
-        # Rewire layout relationship to match source slide's actual layout
-        src_layout_name = source_slide.slide_layout.name
-        target_layout = next(
-            (lay for lay in target_prs.slide_layouts if lay.name == src_layout_name),
-            target_prs.slide_layouts[0],
+        # Point the clone at the source slide's own layout, imported into this
+        # package. Matching a FortuneAI layout by name instead would leave the
+        # slide's placeholders inheriting the wrong fonts, bullets and colours.
+        layout_part = DeckGenerator._import_slide_layout(
+            target_prs, source_slide.slide_layout
         )
         for rId, rel in list(new_slide.part.rels.items()):
             if rel.reltype == RT.SLIDE_LAYOUT:
                 new_slide.part.drop_rel(rId)
                 break
-        new_slide.part.relate_to(target_layout.part, RT.SLIDE_LAYOUT)
+        new_slide.part.relate_to(layout_part, RT.SLIDE_LAYOUT)
 
         return new_slide
 
@@ -373,17 +571,30 @@ class DeckGenerator:
                     used.add(int(el.get("id", 0)))
                 except (ValueError, TypeError):
                     pass
-        next_id = max(used, default=0) + 1
-        for el in slide._element.iter(qn("p:cNvPr")):
+
+        def _sid(el) -> int:
             try:
-                sid = int(el.get("id", 0))
+                return int(el.get("id", 0))
             except (ValueError, TypeError):
-                sid = 0
-            if sid == 0 or sid in used:
+                return 0
+
+        own = list(slide._element.iter(qn("p:cNvPr")))
+        # Reserve ids further down this slide too, otherwise a replacement id can
+        # collide with a shape we have not visited yet and duplicate it.
+        reserved = used | {_sid(el) for el in own}
+        next_id = max(reserved, default=0) + 1
+        taken: set[int] = set()
+        for el in own:
+            sid = _sid(el)
+            if sid == 0 or sid in used or sid in taken:
+                while next_id in reserved:
+                    next_id += 1
                 el.set("id", str(next_id))
+                reserved.add(next_id)
+                taken.add(next_id)
                 next_id += 1
             else:
-                used.add(sid)
+                taken.add(sid)
 
     @staticmethod
     def _set_ph_text(ph, text: str) -> None:
@@ -567,6 +778,7 @@ class DeckGenerator:
                 self._insert_slide_at(prs, cursor + 1 + j)
             cursor += 1 + len(refs)
 
+        sync_sections(prs)
         return prs
 
     def build(

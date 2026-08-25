@@ -1,3 +1,4 @@
+import asyncio
 from unittest.mock import MagicMock
 
 from server import (
@@ -5,7 +6,7 @@ from server import (
     confirm_mix,
     filter_decks_by_tags,
     get_slide_content,
-    propose_mix,
+    mcp,
     search_decks,
 )
 
@@ -35,6 +36,12 @@ def _valid_schema(**overrides) -> dict:
     }
     base.update(overrides)
     return base
+
+
+def test_mcp_exposes_no_product_proposal_tool():
+    names = {tool.name for tool in asyncio.run(mcp.list_tools())}
+    assert "propose_mix" not in names
+    assert {"confirm_mix", "build_deck"} <= names
 
 
 def test_search_decks_delegates_to_retriever(mocker):
@@ -146,59 +153,24 @@ def test_filter_decks_by_tags_delegates_to_retriever(mocker):
     assert results == fake_results
 
 
-def test_propose_mix_delegates_to_engine(mocker):
-    from ingestion.logic_guide.models import IdeationResult, ProposedProduct, TierProposal
-
-    tier = TierProposal(
-        budget_target=50_000.0,
-        label=None,
-        products=(
-            ProposedProduct(
-                name="CEO Daily",
-                category="Newsletter",
-                gtm_category="Newsletters",
-                price=50_000.0,
-                pricing_text="$5k/day",
-            ),
-        ),
-        total=50_000.0,
-    )
-    mock_engine = MagicMock()
-    mock_engine.propose.return_value = IdeationResult(tiers=[tier])
-    mocker.patch("server._get_ideation_engine", return_value=mock_engine)
-    result = propose_mix(schema=_valid_schema())
-    assert result["status"] == "ok"
-    assert result["tier_count"] == 1
-    mock_engine.propose.assert_called_once()
-
-
-def test_propose_mix_escalation(mocker):
-    from ingestion.logic_guide.models import IdeationResult
-
-    mock_engine = MagicMock()
-    mock_engine.propose.return_value = IdeationResult(
-        escalations=["Conference requires GTM escalation"]
-    )
-    mocker.patch("server._get_ideation_engine", return_value=mock_engine)
-    result = propose_mix(schema=_valid_schema())
-    assert result["status"] == "escalation"
-    assert result["escalations"]
-
-
-def test_confirm_mix_delegates(mocker):
+def test_confirm_mix_delegates_flat_selection(mocker):
     fake = {
         "status": "ok",
         "deck_schema": _valid_schema(),
         "warnings": [],
         "confirmed_products": _valid_schema()["confirmed_products"],
-        "selected_tier": {"budget_target": 50_000.0},
+        "mix_total": 35_000,
     }
-    mocker.patch("server._get_ideation_catalogs", return_value=(MagicMock(), MagicMock()))
-    mocker.patch("server.confirm_mix_from_dict", return_value=fake)
+    mocker.patch("server._get_product_catalogs", return_value=(MagicMock(), MagicMock()))
+    wrapper = mocker.patch("server.confirm_mix_from_dict", return_value=fake)
     result = confirm_mix(
         discovery=_valid_schema(),
-        ideation={"tiers": [], "escalations": [], "unavailable_products": [], "notes": []},
-        tier_index=0,
+        selected_products=[
+            {"name": "CIO Intelligence Newsletter", "category": "Newsletters"}
+        ],
     )
     assert result["status"] == "ok"
     assert result["deck_schema"]["company_name"] == "Acme Corp"
+    payload = wrapper.call_args.args[0]
+    assert set(payload) == {"discovery", "selected_products"}
+    assert payload["selected_products"][0]["name"] == "CIO Intelligence Newsletter"

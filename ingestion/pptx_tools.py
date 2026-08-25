@@ -12,7 +12,10 @@ import re
 from copy import deepcopy
 
 from pptx.enum.shapes import MSO_SHAPE_TYPE, PP_PLACEHOLDER
+from pptx.oxml import parse_xml
 from pptx.oxml.ns import qn
+
+_P14_NS = "http://schemas.microsoft.com/office/powerpoint/2010/main"
 
 # FortuneAI History of Trust / Audience possessive tokens use U+2019.
 APOS = "\u2019"
@@ -294,13 +297,107 @@ def insert_logo(slide, image_bytes: bytes) -> None:
         raise ValueError(f"logo image is unreadable: {exc}") from exc
 
 
+def _section_lst(prs):
+    """PowerPoint's section list, stored as an extension on p:presentation."""
+    ext_lst = prs.part._element.find(qn("p:extLst"))
+    if ext_lst is None:
+        return None
+    for ext in ext_lst:
+        section_lst = ext.find(f"{{{_P14_NS}}}sectionLst")
+        if section_lst is not None:
+            return section_lst
+    return None
+
+
+def _prune_empty_sections(section_lst) -> None:
+    for section in list(section_lst):
+        id_lst = section.find(f"{{{_P14_NS}}}sldIdLst")
+        if id_lst is None or len(id_lst) == 0:
+            section_lst.remove(section)
+    if len(section_lst) == 0:
+        ext = section_lst.getparent()
+        ext.getparent().remove(ext)
+
+
 def delete_slide(prs, slide_idx: int) -> None:
-    """Remove a slide by 0-based index (sldIdLst + relationship)."""
+    """Remove a slide by 0-based index (sldIdLst + relationship + section entry)."""
     n = len(prs.slides)
     if slide_idx < 0 or slide_idx >= n:
         raise ValueError(f"slide index {slide_idx} out of range (0..{n - 1})")
     sld_id_lst = prs.slides._sldIdLst
     sld_id = sld_id_lst[slide_idx]
     r_id = sld_id.get(qn("r:id"))
+    slide_id = sld_id.get("id")
     prs.part.drop_rel(r_id)
     sld_id_lst.remove(sld_id)
+
+    # A section entry outliving its slide is unreadable content to PowerPoint,
+    # which repairs the deck on open. Deletions run from several call sites
+    # (unfunded dividers, stock tail, unused audience pages), so keep the
+    # section list correct here rather than at each of them.
+    section_lst = _section_lst(prs)
+    if section_lst is None:
+        return
+    for section in section_lst:
+        id_lst = section.find(f"{{{_P14_NS}}}sldIdLst")
+        if id_lst is None:
+            continue
+        for entry in list(id_lst):
+            if entry.get("id") == slide_id:
+                id_lst.remove(entry)
+    _prune_empty_sections(section_lst)
+
+
+def sync_sections(prs) -> None:
+    """Reconcile the section list with the slides that actually exist.
+
+    FortuneAI ships sections (TITLE, AUDIENCE, PRODUCT OFFERINGS, …) and
+    assembly deletes unfunded dividers and the stock Print page, then inserts
+    product clones. A section entry left pointing at a deleted slide is content
+    PowerPoint cannot read, so it repairs the deck on open. Slides added since
+    join the section of the nearest slide before them, which puts product clones
+    under the divider they were inserted after.
+    """
+    section_lst = _section_lst(prs)
+    if section_lst is None:
+        return
+
+    order: list[str] = []
+    for sld_id in prs.slides._sldIdLst:
+        slide_id = sld_id.get("id")
+        if slide_id is not None:
+            order.append(slide_id)
+    live = set(order)
+
+    sections = []
+    for section in list(section_lst):
+        id_lst = section.find(f"{{{_P14_NS}}}sldIdLst")
+        if id_lst is None:
+            section_lst.remove(section)
+            continue
+        sections.append((section, id_lst))
+
+    owner: dict[str, int] = {}
+    for index, (_, id_lst) in enumerate(sections):
+        for entry in id_lst:
+            slide_id = entry.get("id")
+            if slide_id in live:
+                assert slide_id is not None
+                owner.setdefault(slide_id, index)
+
+    assignment: dict[str, int] = {}
+    current = 0
+    for slide_id in order:
+        current = owner.get(slide_id, current)
+        assignment[slide_id] = current
+
+    for index, (_section, id_lst) in enumerate(sections):
+        for entry in list(id_lst):
+            id_lst.remove(entry)
+        for slide_id in order:
+            if assignment[slide_id] == index:
+                id_lst.append(
+                    parse_xml(f'<p14:sldId xmlns:p14="{_P14_NS}" id="{slide_id}"/>')
+                )
+
+    _prune_empty_sections(section_lst)
