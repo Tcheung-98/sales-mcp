@@ -1,9 +1,10 @@
-"""Integration smoke: propose_mix → confirm_mix → build_deck (mock AI).
+"""Integration smoke: Prodie-selected products → confirm_mix → build_deck.
 
   PYTHONPATH=. uv run python tests/smoke_ideation_to_deck.py --mock-ai
 
-Uses representative Logic Guide fixtures (no live S3 for ideation). build_deck
-assembly uses real S3 FortuneAI + GTM when available; --mock-ai skips Claude.
+Uses a representative product selection as if Prodie + the associate checkboxes
+already chose it. build_deck assembly uses real S3 FortuneAI + GTM when available;
+--mock-ai skips Claude.
 """
 
 from __future__ import annotations
@@ -18,18 +19,18 @@ import requests
 from dotenv import load_dotenv
 from pptx import Presentation
 
-from ingestion.confirm_mix import confirm_mix_from_dict, serialize_ideation
+from ingestion.confirm_mix import confirm_mix_from_dict
 from ingestion.generator import DeckGenerator
-from ingestion.schema import DeckSchema, DiscoverySchema
+from ingestion.schema import DeckSchema
 from tests.fortuneai_placeholder_fixture import MINIMAL_PNG, mock_placeholder_ai
 from tests.logic_guide_fixtures import base_discovery_fields, build_representative_engine
 from tests.smoke_build_live import LEFTOVER_TOKENS, _slide_text
 
-# Print-only discovery: single budget aligned with Full Page price for a clean mix lock.
-_PRINT_DISCOVERY = base_discovery_fields(
-    preferred_platforms_products=["Print"],
-    budgets=[{"amount": 35_000.0, "label": "Primary"}],
-    targeting_details="Print magazine full page placement",
+# Prodie-selected newsletter with a budget aligned to the authoritative fixture price.
+_DISCOVERY = base_discovery_fields(
+    preferred_platforms_products=["Newsletters"],
+    budgets=[{"amount": 5_000.0, "label": "Primary"}],
+    targeting_details="CEO and C-suite leadership audience",
 )
 
 
@@ -40,22 +41,15 @@ def _align_budgets(deck_schema: dict, mix_total: float) -> dict:
     return deck_schema
 
 
-def _run_ideation_chain() -> tuple[dict, dict]:
+def _run_selection_chain() -> tuple[dict, dict]:
     engine = build_representative_engine()
-    discovery = _PRINT_DISCOVERY
-    ideation = engine.propose(DiscoverySchema.model_validate(discovery))
-    assert not ideation.requires_gtm_escalation
-    assert ideation.tiers
-    tier = ideation.tiers[0]
-    assert tier.products[0].name == "Full Page"
-
+    discovery = _DISCOVERY
     gtm = engine._gtm
     inventory = engine._inventory
     confirm = confirm_mix_from_dict(
         {
             "discovery": discovery,
-            "ideation": serialize_ideation(ideation),
-            "tier_index": 0,
+            "selected_products": [{"name": "CEO Daily", "category": "Newsletters"}],
         },
         gtm=gtm,
         inventory=inventory,
@@ -66,15 +60,15 @@ def _run_ideation_chain() -> tuple[dict, dict]:
     return deck_schema, confirm
 
 
-def _verify_print_deck(prs: Presentation) -> list[str]:
+def _verify_deck(prs: Presentation) -> list[str]:
     blob = _slide_text(prs)
     errors: list[str] = []
     for token in LEFTOVER_TOKENS:
         if token in blob:
             errors.append(f"leftover token {token!r}")
-    if "Full Page" not in blob and "FULL PAGE" not in blob.upper():
-        errors.append("Full Page clone missing")
-    if not re.search(r"\$35,000", blob):
+    if "CEO Daily" not in blob and "CEO DAILY" not in blob.upper():
+        errors.append("CEO Daily clone missing")
+    if not re.search(r"\$5,000", blob):
         errors.append("investment budget not filled")
     return errors
 
@@ -93,7 +87,7 @@ def _run_mock_ai(deck_schema: dict) -> int:
         logo_bytes=MINIMAL_PNG,
         ai=mock_placeholder_ai(),
     )
-    errors = _verify_print_deck(prs)
+    errors = _verify_deck(prs)
     if warnings:
         print("warnings:", warnings)
     if errors:
@@ -117,7 +111,7 @@ def _run_live_build(deck_schema: dict) -> int:
     resp = requests.get(result["download_url"], timeout=60)
     resp.raise_for_status()
     prs = Presentation(io.BytesIO(resp.content))
-    errors = _verify_print_deck(prs)
+    errors = _verify_deck(prs)
     if errors:
         print("SMOKE FAILED:")
         for err in errors:
@@ -141,8 +135,8 @@ def main() -> int:
     )
     args = parser.parse_args()
 
-    deck_schema, confirm = _run_ideation_chain()
-    print("confirm:", confirm["status"], confirm.get("selected_tier"))
+    deck_schema, confirm = _run_selection_chain()
+    print("confirm:", confirm["status"], confirm.get("confirmed_products"))
     if args.mock_ai:
         return _run_mock_ai(deck_schema)
     return _run_live_build(deck_schema)

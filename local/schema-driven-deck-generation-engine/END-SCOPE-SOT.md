@@ -1,8 +1,9 @@
 # Pitch Deck end-scope SoT
 
 > **Captured:** 2026-08-17 · **Associate UX + progress restated:** 2026-08-18  
+> **Split restated:** 2026-08-25 — Prodie **proposes relevant products** for associate selection; **deckgen** (`sales-mcp` `build_deck`) assembles the PPTX. sales-mcp does not choose the mix.  
 > **Purpose:** Shared source of truth for project *end* scope after product delivered  
-> Pitch Deck Workflow + Fortune Logic Guide V1. Prefer this over older Phase A/B epic framing when they conflict.  
+> Pitch Deck Workflow + Fortune Logic Guide V1. Prefer this over older Phase A/B RAG docs when they conflict.  
 > **Product sources (read-only):**  
 > - `~/Downloads/Pitch Deck Workflow.pdf` (docx twin referenced by GTM)  
 > - `~/Downloads/Fortune_Logic_Guide_V1.pdf`  
@@ -11,31 +12,40 @@
 > - `Fortune_AITool_GTM_Database` (+ Product Tags, GTM Tags, Audience Data, Product Category, …) — SharePoint / S3 sync  
 > - `Fortune Inventory & Reservation Calendar 2026 Final` — availability + Pricing + Benchmarks  
 
-Related: [`PROGRESS.md`](PROGRESS.md) (living goal + ticket status) · [`CLEANUP-TODO.md`](CLEANUP-TODO.md) · [`NEXT-STEPS.md`](NEXT-STEPS.md) · Jira Creation [PI-2516](https://fortune.atlassian.net/browse/PI-2516) · Ideation [PI-2755](https://fortune.atlassian.net/browse/PI-2755) · Shelved stylist [PI-2754](https://fortune.atlassian.net/browse/PI-2754)
+Related: [`PROGRESS.md`](PROGRESS.md) · [`PRODIE-IDEATION-SPEC.md`](PRODIE-IDEATION-SPEC.md) (Prodie propose + select MVP) · [`CLEANUP-TODO.md`](CLEANUP-TODO.md) · [`NEXT-STEPS.md`](NEXT-STEPS.md) · Jira Creation [PI-2516](https://fortune.atlassian.net/browse/PI-2516) · Ideation [PI-2755](https://fortune.atlassian.net/browse/PI-2755) · Shelved stylist [PI-2754](https://fortune.atlassian.net/browse/PI-2754)
 
 ---
 
 ## One-liner end state
 
 ```text
-Discovery (seller intake)
-  → Ideation (Logic Guide + GTM DB + inventory/pricing → proposed mix → seller confirm)
-  → Creation (FortuneAI_DeckTemplate + exact GTM Deck Path/Slide # clones + deterministic placeholders)
-  → PPTX out (SharePoint for humans; S3 optional machine URL)
+Discovery (seller intake in Prodie)
+  → Propose (Prodie: Logic Guide V1 + GTM + inventory → relevant, priced, available products)
+  → Select (associate checkboxes — this is the mix)
+  → Deckgen (sales-mcp build_deck: FortuneAI_DeckTemplate + exact GTM Deck Path/Slide # clones
+       + deterministic placeholders)
+  → PPTX out
 ```
 
-**Associate experience (SalesGPT / Prodie) — this is in spec, not a new idea:**
+**Associate experience (Prodie) — MVP:**
 
 ```text
-Form (Discovery) → requirements / spec / PRD on DiscoverySchema
-  → SalesGPT Ideation brain proposes offerings (Logic Guide + GTM + inventory/pricing)
-  → Associate selects / swaps the specific options they will pitch  (I3)
-  → Only then: Creation / build_deck  (C1 spine + A5 clones + C2 fills)
+Form (Discovery) ± SalesGPT conversation
+  → Prodie shows relevant products (names + prices + flight/availability + short why)
+  → Associate selects / swaps via checkboxes (running total / timelines)  (I3)
+  → Only then: pass locked spec to sales-mcp build_deck  (C1 spine + A5 clones + C2 fills)
 ```
 
-Humans vet **products (offerings)**, not Hunter slide numbers. After lock, A5 maps each confirmed name/category to `Deck Path` + `Slide #` and C1 pastes that page. C1/C2 must not invent or swap offerings.
+**Prodie does not build the deck.** It selects relevant products and collects the associate’s checks.  
+**sales-mcp does not choose products.** It consumes the locked spec and clones slides.
 
-**Not the end state:** RAG/Titan similarity for product pages · Cursor vision stylist · industry Category_Presentation_* matrix as primary spine · Claude inventing product slide copy · generating a deck before the associate confirms the mix.
+There is **no `propose_mix` MCP tool**. In-repo `LogicGuideEngine` modules are isolated
+reference/test code, not associate runtime. Guide **Media Mix Logic** (auto-fund a package)
+is **not** required MVP; the associate’s selection is the mix.
+
+Humans vet **products (offerings)**, not Hunter slide numbers. After lock, A5 maps each confirmed name/category to `Deck Path` + `Slide #` and C1 pastes that page. C1/C2 must not invent, rank, or swap offerings. Prodie must not pick **slides** — only **product names** (plus category when names collide).
+
+**Not the end state:** RAG/Titan similarity for product pages · Cursor vision stylist · industry Category_Presentation_* matrix as primary spine · Claude inventing product slide copy · generating a deck before the associate confirms the mix · Prodie auto-locking a funded Media Mix without checkboxes.
 
 ---
 
@@ -48,8 +58,8 @@ Three mandatory stages:
 | Stage | Job | Gate |
 |---|---|---|
 | **Discovery** | Capture seller inputs | Almost all fields required (only Platform/Product Specifics optional) |
-| **Ideation** | Choose placements that fit budget, flight, inventory, Logic Guide | Seller must confirm/swap mix **before** Creation |
-| **Creation** | Assemble the pitch deck | Only after mix lock |
+| **Ideation** | Prodie proposes relevant placements using Logic Guide V1 + GTM + inventory; MCP does not rank | Seller must **select** mix **before** Creation |
+| **Creation** | Deckgen assembles the pitch deck from the locked spec | Only after mix lock |
 
 **Discovery inputs (required unless noted):** company name · industry (fixed enum) · budget (up to 3 tiers via “+”) · flight dates · campaign goal · targeting details · KPIs (enum) · KPI details · campaign narrative · preferred platforms/products (enum) · platform/product specifics *(optional)* · additional RFP details · *(Creation also needs client logo)*.
 
@@ -70,16 +80,17 @@ Three mandatory stages:
 **Divider ↔ platform mapping (fixed order):**  
 High-Impact Media (13) ← Digital Ads/Programmatic · Editorial Alignment (14) ← Newsletters · Premium Video (15) ← Vodcasts · Print (16) ← Print · Branded Content (17) ← Branded Content.
 
-### 2. Fortune Logic Guide V1 — Ideation brain
+### 2. Fortune Logic Guide V1 — relevance policy (executed by Prodie)
 
-Runs **after** Discovery, **before** Creation:
+The Guide tells Prodie **which products belong on the menu**. Prodie applies it **after** Discovery and **before** selection, using SharePoint / synced GTM + inventory as evidence. sales-mcp may expose **catalog, price, and availability** so Prodie does not invent rates; it must not choose the locked mix.
 
-1. **Availability first** — drop sold/held vs flight dates via Inventory Calendar. Products not on the Products tab (e.g. non-takeover digital, branded content) have no inventory gate.
-2. **Product Category Rules** — per-category candidate sets (Digital/Newsletters/Vodcasts/Branded Content/Print). Independent of budget. Trigger phrases, defaults (Crown/Scroller, Full Page @$35K when Print selected), genuine-match tag rules, Branded Content video/written tracks + caps.
-3. **Media Mix Logic** — price candidates → fund mandatory minimums in order → Branded Content priority → Print → remaining Digital conditionals → backfill → cross-category conflict rules → format collision (include both).
-4. **Multi-tier** — build largest tier first; lower tiers are **strict subsets** via trim (not re-run category rules); backfill Display to approach lower target; “don’t zero a category” does **not** apply to lower tiers.
+Policy the Guide still specifies for **relevance + availability** (do not silently drop):
 
-**Explicit V1 exclusions (revisit later):** requirements-based branded content (spotlights, syndicated film, research support, events, lead gen, etc.), Digital Ad Creative, on-location video variants.
+1. **Availability** — drop sold/held vs flight dates via Inventory Calendar when the product is on the Products tab. Products not on that tab (e.g. non-takeover digital, branded content) have no inventory gate. Do not offer sold/held as default-checked pitch lines.
+2. **Product Category Rules** — per-category candidate sets (Digital/Newsletters/Vodcasts/Branded Content/Print). Trigger phrases, defaults (Crown/Scroller, Full Page @$35K when Print selected), genuine-match tag rules, Branded Content video/written tracks. Independent of auto-funding a package.
+3. **Explicit V1 exclusions (revisit later):** requirements-based branded content (spotlights, syndicated film, research support, events, lead gen, etc.), Digital Ad Creative, on-location video variants.
+
+Guide **Media Mix Logic** (price → mandatory minimums → branded-content priority → Print → backfill → cross-category rules → lower-tier trim) is **reference**. Associate MVP does **not** require Prodie to lock that package. Checkboxes are the mix. The in-repo `LogicGuideEngine` “most expensive newsletter/vodcast wins” pass is **not** the picker.
 
 ### 3. Data / inventory SoT (data team + SharePoint)
 
@@ -97,25 +108,25 @@ This repo **consumes** synced copies (S3 keys / Graph fetch). It does **not** ow
 ## What this implies (architecture)
 
 ```text
-Prodie / seller UI  (associate form + confirm)
+Prodie  (form ± SalesGPT chat + Logic Guide V1 + GTM/inventory)
   │
-  ├─ Discovery → DiscoverySchema (intake form = requirements/spec)
+  ├─ Discovery → DiscoverySchema
   │
-  ├─ Ideation engine (Logic Guide / SalesGPT brain) ──reads──► GTM DB + Inventory/Pricing
-  │     └─ proposed offerings → associate select/swap → confirmed_products[]
+  ├─ Propose ──reads──► Logic Guide V1 + GTM DB + Inventory/Pricing
+  │     └─ relevant offerings → associate checkboxes → confirmed_products[]
   │
-  └─ Creation (sales-mcp)  — only after I3 lock
-        build_deck(DeckSchema, template_url?)
-          spine = FortuneAI_DeckTemplate (not Category_Presentation_*)
-          product pages = exact Deck Path + Slide #   (A5 + C1)
-          placeholders = deterministic + bounded AI fills   (C2)
+  └─ pass locked spec ──► sales-mcp build_deck
+        (optional confirm_mix = validate names / availability / prices only)
+        spine = FortuneAI_DeckTemplate (not Category_Presentation_*)
+        product pages = exact Deck Path + Slide #   (A5 + C1)
+        placeholders = deterministic + bounded AI fills   (C2)
 ```
 
 | Implication | Detail |
 |---|---|
-| **Ideation is a first-class product surface** | Not a Prodie-only chat habit. Form → proposed offerings → associate select (I3) → Creation. Needs I1 data + I2 engine + I3 confirm. |
-| **Creation is mostly deterministic** | Clone + template select + placeholder fill. Bounded AI only for named Workflow slots (title, Opportunity body, audience titles, program overview blurbs). |
-| **RAG is not Creation-critical** | Titan/embeddings may linger for research tools; not the product-page selector. |
+| **Propose is Prodie’s job** | Form + conversation → relevant products → associate select (I3) → deckgen. MCP must not inject a mix. |
+| **Build is deckgen’s job** | Clone + template + placeholder fill. Bounded AI only for named Workflow slots. Never rewrite product clones. |
+| **RAG is not Creation-critical** | Titan/embeddings may linger for research tools; not the product-page selector. Prodie must not search Hunter decks for “similar slides.” |
 | **Stylist (Phase B) is v2** | Shelved ([PI-2754](https://fortune.atlassian.net/browse/PI-2754)). Do not block MVP on Cursor vision. |
 | **Schema vocab must converge** | Workflow platforms vs Logic Guide categories vs legacy `_VALID_CATEGORIES` (`Digital Media`/`Newsletter`/…) need aliases until unified. |
 | **Data freshness is an ops dependency** | Wrong/outdated GTM xlsx or missing `product-decks/` binaries = loud failure, not silent quality loss. |
@@ -139,23 +150,18 @@ Living ticket table: [`PROGRESS.md`](PROGRESS.md). Snapshot:
 | Ideation epic filed | [PI-2755](https://fortune.atlassian.net/browse/PI-2755) + children I1–I3 |
 | Stylist shelved | [PI-2754](https://fortune.atlassian.net/browse/PI-2754) On Hold |
 
-### In flight
+### In flight / remaining
 
 | Piece | Status |
 |---|---|
-| I1 GTM + inventory + pricing sources | [PI-2759](https://fortune.atlassian.net/browse/PI-2759) **In Progress** |
-
-### Not started (MVP remaining)
-
-| ID | Ticket | Owns |
-|---|---|---|
-| I2 | [PI-2760](https://fortune.atlassian.net/browse/PI-2760) | Logic Guide engine (category rules + media mix + tiers) |
-| I3 | [PI-2761](https://fortune.atlassian.net/browse/PI-2761) | Seller confirm/swap → lock `confirmed_products` |
-| Wire | [PI-2350](https://fortune.atlassian.net/browse/PI-2350) (+ [PI-2373](https://fortune.atlassian.net/browse/PI-2373)) | Prodie access / tool wiring |
+| I1 GTM + inventory + pricing sources | [PI-2759](https://fortune.atlassian.net/browse/PI-2759) **Done** |
+| I2 Logic Guide modules | [PI-2760](https://fortune.atlassian.net/browse/PI-2760) **Isolated** — no proposal MCP tool; not associate runtime |
+| I3 seller confirm/swap | [PI-2761](https://fortune.atlassian.net/browse/PI-2761) MCP lock exists; Prodie checkbox UI still PI-2350 |
+| Wire | [PI-2350](https://fortune.atlassian.net/browse/PI-2350) (+ [PI-2373](https://fortune.atlassian.net/browse/PI-2373)) **MVP remaining:** Prodie propose + select + pass spec to `build_deck` |
 
 ### Still legacy / demote (do not invest)
 
-- ~~Industry `Category_Presentation_*` + franchise keyword `select_template()`~~ — retired at C1 (`prepare_deck` removed; FortuneAI only)
+- ~~Industry `Category_Presentation_*` + franchise keyword `select_template()`~~ — retired at C1
 - Titan `SlideEmbedder` / snapshot cosine as Creation matcher — remove after A5 merge (see CLEANUP-TODO)
 - Claude blank-deck / Opus QA paths — dormant; delete when safe
 - Phase B review packages / `cursor_sdk` — shelved
@@ -164,13 +170,13 @@ Living ticket table: [`PROGRESS.md`](PROGRESS.md). Snapshot:
 
 | Stage | Fit | Gap |
 |---|---|---|
-| Discovery | **Strong** | Schema enums + tiers landed; Prodie/UI intake + logo plumbing still wiring |
-| Ideation | **Weak → building** | Spec clear; engine + data + confirm loop unfinished |
-| Creation spine + fills | **Strong (C1 + C2)** | FortuneAI + placeholders landed; live Claude manual QA before prod |
+| Discovery | **Partial** | Schema enums + tiers landed in sales-mcp; Prodie still on old 6-field intake |
+| Propose + select | **Not wired** | Guide-informed product list + checkboxes in Prodie (PI-2350) |
+| Creation spine + fills | **Strong (C1 + C2)** | Live Claude + FortuneAI PPTX QA before prod |
 | Product pages | **Strong** | Exact map path landed; coverage holes are GTM data issues |
-| End-to-end seller flow | **Not yet** | Needs I2+I3+Prodie |
+| End-to-end seller flow | **Not yet** | Needs Prodie propose + select + `build_deck` handoff |
 
-**Pivot verdict:** Directionally aligned — no second architecture rewrite. Remaining work is (1) implement Ideation as specified, (2) retarget Creation to FortuneAI_DeckTemplate + Workflow fill rules, (3) slim RAG/stylist-era weight after A5.
+**Pivot verdict (2026-08-25):** Creation stays deterministic clone+fill. **Prodie MVP is a relevant-product menu + checkboxes.** Remaining work is (1) Prodie Discovery + propose + select, (2) pass locked spec to `build_deck`, (3) slim RAG/stylist-era weight.
 
 ---
 
@@ -178,20 +184,22 @@ Living ticket table: [`PROGRESS.md`](PROGRESS.md). Snapshot:
 
 | Concern | Owner |
 |---|---|
-| Workflow / Logic Guide / template structure | Product + GTM |
+| Workflow / Logic Guide V1 / template structure | Product + GTM |
 | GTM DB, inventory calendar, pricing, Hunter decks | Data / GTM (SharePoint SoT → sync to runtime) |
-| Ideation engine + Creation assembly MCP | This repo (`sales-mcp`) + Prodie orchestration |
-| Seller UX confirm/swap | Prodie / AE surface (I3) |
+| Which products appear on the menu | **Prodie** (Logic Guide V1 + form/chat + GTM/inventory) |
+| Which products go in the deck | **Associate checkboxes** |
+| Creation assembly | **sales-mcp** `build_deck` |
+| Optional name/availability validation | `confirm_mix` (not ranking) |
 | Finished deck retention for humans | SharePoint (see retention notes in NEXT-STEPS) |
 
 ---
 
 ## Working rules for agents
 
-1. Treat **Workflow + Logic Guide + GTM sheets** as product SoT; older Phase B / RAG epic docs are historical unless explicitly revived.
-2. Do not invent product slides or silently substitute near-matches.
-3. Do not fund Creation before a seller-confirmed mix (I3 gate). Form → proposed offerings → associate select → then `build_deck`.
+1. Treat **Workflow + Logic Guide V1 + GTM sheets** as product SoT; older Phase B / RAG epic docs are historical unless explicitly revived.
+2. Do not invent product slides or silently substitute near-matches. Prodie proposes **product names**; A5 maps slides.
+3. Do not call `build_deck` before checkbox lock. The MCP exposes no product-proposal tool. Do not have Prodie assemble PPTX.
 4. Prefer loud failures on missing Deck Path / inventory / price mismatch.
 5. After A5 merges, cleanup Titan in a **separate** PR — don’t couple map swap with RAG deletion.
 6. Conference Sponsorship → escalate to GTM; Branded Content V1 exclusions stay out until product revisits.
-|
+7. Do not put mix ranking (most-expensive-wins, Titan similarity) in Creation or as a hidden lock ahead of checkboxes.

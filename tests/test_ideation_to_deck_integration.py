@@ -1,12 +1,12 @@
-"""Integration: propose → confirm → assemble + mock AI fills (no live S3)."""
+"""Integration: Prodie selection → confirm → assemble + mock AI fills."""
 
 from __future__ import annotations
 
 from unittest.mock import MagicMock
 
-from ingestion.confirm_mix import confirm_mix_from_dict, serialize_ideation
+from ingestion.confirm_mix import confirm_mix_from_dict
 from ingestion.placeholder_fills import apply_placeholders
-from ingestion.schema import DeckSchema, DiscoverySchema
+from ingestion.schema import DeckSchema
 from tests.fortuneai_placeholder_fixture import (
     MINIMAL_PNG,
     fortuneai_fixture_bytes,
@@ -27,26 +27,23 @@ def _newsletter_discovery() -> dict:
     )
 
 
-def test_propose_confirm_assemble_no_leftover_tokens():
+def test_prodie_selection_confirm_assemble_no_leftover_tokens():
     engine = build_representative_engine()
-    discovery = DiscoverySchema.model_validate(_newsletter_discovery())
-    ideation = engine.propose(discovery)
-    assert not ideation.requires_gtm_escalation
-    assert ideation.tiers
+    discovery = _newsletter_discovery()
+    discovery["budgets"] = [{"amount": 5_000, "label": "Primary"}]
 
     confirm = confirm_mix_from_dict(
         {
-            "discovery": _newsletter_discovery(),
-            "ideation": serialize_ideation(ideation),
-            "tier_index": 0,
+            "discovery": discovery,
+            "selected_products": [
+                {"name": "CEO Daily", "category": "Newsletters"}
+            ],
         },
         gtm=engine._gtm,
         inventory=engine._inventory,
     )
     assert confirm["status"] == "ok"
-    mix = sum(p["price"] for p in confirm["confirmed_products"])
     deck_data = confirm["deck_schema"]
-    deck_data["budgets"] = [{"amount": mix, "label": "Primary"}]
 
     schema = DeckSchema.model_validate(deck_data)
     generator = _build_generator()

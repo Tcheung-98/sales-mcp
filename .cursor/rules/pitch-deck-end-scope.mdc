@@ -1,0 +1,40 @@
+---
+description: Shared SoT for Pitch Deck Workflow (Discovery → Prodie propose/select → deckgen)
+alwaysApply: true
+---
+
+# Pitch Deck end-scope SoT
+
+Canonical: `local/schema-driven-deck-generation-engine/END-SCOPE-SOT.md` (sales-mcp) or `local/pitch-deck-mvp/` (IsItInProd copy).  
+Prodie spec: `PRODIE-IDEATION-SPEC.md`.  
+Living goal/progress: `PROGRESS.md`.
+
+Product specs: Pitch Deck Workflow + Fortune Logic Guide V1. Assets: `FortuneAI_DeckTemplate.pptx`, `Fortune_AITool_GTM_Database`, Inventory Calendar.
+
+## End state (MVP)
+
+Form (Discovery) ± SalesGPT chat → **Prodie proposes relevant products** (Logic Guide V1 + GTM/inventory) → **associate checkboxes** → pass locked spec to **sales-mcp `build_deck`** (FortuneAI + exact Deck Path/Slide # clones + C2 fills) → PPTX.
+
+**Prodie does not build the deck.** It shows a relevant, priced, availability-aware menu.  
+**The associate’s checks are the mix.**  
+**Deckgen does not choose products.** The MCP exposes no product-proposal tool. Do not generate before checkbox lock. Humans vet **product names**, not Hunter slide numbers. After lock, A5 maps name/category → clone.
+
+Guide Media Mix auto-fund is **not** required MVP.
+
+## Not end state
+
+Titan/RAG product matching · MCP `LogicGuideEngine` as the associate picker · Prodie assembling PPTX · Cursor stylist MVP (PI-2754) · `Category_Presentation_*` spine · AI rewriting product slides.
+
+## Progress (2026-08-25)
+
+- Done: A1–A3, C3 schema, A5 exact map, C1 FortuneAI assembly, C2 placeholders, I1 data, I3 `confirm_mix` (MCP validate)
+- Remaining MVP: Prodie Discovery + propose + checkboxes + `build_deck` handoff (PI-2350)
+
+## Hard rules
+
+1. Missing GTM row / inventory hold / price mismatch → fail loud; never silent substitute.
+2. Conference Sponsorship → GTM escalate; do not invent conference slides.
+3. C2 fills named FortuneAI slots only; never rewrite A5 product clones.
+4. Merge A5 before Titan cleanup; don’t delete RAG in the C2 PR.
+5. Prodie proposes product **names** only; never search Hunter decks for similar slides.
+6. Do not default-check sold/held inventory lines.
