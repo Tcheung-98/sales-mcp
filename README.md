@@ -243,39 +243,29 @@ Known Product Tags coverage gaps (flag for GTM; do not invent substitutes):
 - Many Digital Ads section/sub-section takeovers share Slide #9 on High Impact Media
 - Duplicate Branded Content rows (same name/path/slide, different GTM TAGS) — deduped as one
 - `Term Sheet` / `Next To Lead` appear in both Newsletters and Vodcasts — category required
-- No Events / Conferences / Lists rows in Product Tags today
-- Schema still allows `Events` while the sheet may not have a matching category yet
 
-**Slide render for vision QA (B1)** — `ingestion.render_slides.render_slides(pptx, slide_indices)`
-converts selected 0-based slides to PNGs via LibreOffice headless (`soffice`) → PDF →
-`pdftoppm`. Used later by Cursor agent scripts / the B2 review package; not an MCP tool.
-Requires LibreOffice + poppler-utils in the Docker image (or locally). Optional `SOFFICE_BIN`
-overrides the binary path.
+**Titan / RAG (legacy)** — `search_decks`, `filter_decks_by_tags`, and corpus embeddings remain
+for research and ingest. They are **not** the associate Creation path (exact GTM map only).
 
-```python
-from ingestion.render_slides import render_slides
+---
 
-pngs = render_slides("draft.pptx", [0, 2], output_dir="/tmp/qa")
-# → [/tmp/qa/slide-000.png, /tmp/qa/slide-002.png]
-```
+## MCP tools
 
-CLI (same pipeline; for agent scripts):
+| Tool | Purpose |
+|---|---|
+| `build_deck` | FortuneAI assembly + C2 fills → presigned PPTX URL |
+| `confirm_mix` | Validate locked product list → `deck_schema` for `build_deck` |
+| `search_decks` | Semantic slide search (research; not associate picker) |
+| `filter_decks_by_tags` | Tag filter on corpus metadata |
+| `get_slide_content` | Fetch slide text for a deck id |
 
-```bash
-uv run python -m ingestion.render_slides draft.pptx -i 0,2 -o /tmp/qa
-```
+---
 
-**In-memory vector search** — embeddings loaded into numpy at startup, cosine similarity at query
-time. No FAISS index; the corpus (2,404 slides) is small enough that in-memory search is fast and
-removes a dependency.
+## Repo layout
 
-**Streamable HTTP transport** — SSE dropped because Lightsail's load balancer rewrites the `Host`
-header, triggering the MCP SDK's DNS-rebinding protection with 421 errors. DNS-rebinding protection
-disabled at the SDK level via `TransportSecuritySettings`; the LB is the trust boundary.
-
-**Anthropic API (not Bedrock Claude)** — generation uses the Anthropic API directly. Bedrock is
-used only for embeddings (Titan Text v2). API key stored in AWS Secrets Manager; local dev uses
-`ANTHROPIC_API_KEY` env var.
-
-**Python + FastMCP** — official MCP Python SDK (`mcp[cli]`). Do not use the standalone `fastmcp`
-PyPI package; the SDK ships `mcp.server.fastmcp.FastMCP` directly.
+- `server.py` — FastMCP app + tool handlers
+- `ingestion/generator.py` — FortuneAI assembly (`assemble_skeleton`, `build`)
+- `ingestion/placeholder_fills.py` — C2 deterministic + AI placeholder fills
+- `ingestion/gtm_product_map.py` — A5 exact product slide map
+- `ingestion/schema.py` — Discovery + Deck Pydantic models
+- `tests/` — unit tests (no live S3/Anthropic in default suite)

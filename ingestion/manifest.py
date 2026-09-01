@@ -1,7 +1,7 @@
 """Review-package manifest stub for Cursor stylist handoff (Phase B).
 
-assemble_skeleton does not emit a package yet; B2 will write draft.pptx + PNGs
-alongside this schema. Keep the shape minimal until render/exemplar paths exist.
+``assemble_skeleton`` returns ``AssembledSkeleton`` with product-clone provenance;
+B2 will write draft.pptx + PNGs + a full ``ReviewManifest`` alongside this schema.
 """
 
 from __future__ import annotations

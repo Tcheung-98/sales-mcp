@@ -25,7 +25,7 @@ from ingestion.audience_data import AudienceData, load_audience_data_from_s3
 from ingestion.category_dividers import (
     CATEGORY_DIVIDERS,
     FORTUNEAI_DIVIDER_COUNT,
-    FORTUNEAI_FIRST_DIVIDER_INDEX,
+    FORTUNEAI_DIVIDER_SLIDE_INDEX,
     FORTUNEAI_MIN_SLIDES,
     FORTUNEAI_TEMPLATE_BASENAME,
     divider_index_for_category,
@@ -59,6 +59,10 @@ _TEMPLATE_URL_HOST_SUFFIXES = (".sharepoint.com", ".sharepoint.us", ".microsoft.
 
 _RELS_NS = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
 _PML_NS = "http://schemas.openxmlformats.org/presentationml/2006/main"
+
+
+def _template_key_from_url(template_url: str) -> str:
+    return template_url.split("?")[0].rstrip("/").split("/")[-1]
 
 
 _SYSTEM_PROMPT_TEMPLATE = """\
@@ -391,6 +395,12 @@ class DeckGenerator:
     @staticmethod
     def _delete_slide(prs: PresentationType, slide_idx: int) -> None:
         delete_slide(prs, slide_idx)
+
+    @staticmethod
+    def _renumber_slide_parts(prs: PresentationType) -> None:
+        """Assign contiguous slide partnames before save (avoids OPC duplicate warnings)."""
+        r_ids = [sld_id.get(qn("r:id")) for sld_id in prs.slides._sldIdLst]
+        prs.part.rename_slide_parts(r_ids)
 
     @staticmethod
     def _insert_slide_at(prs: PresentationType, position: int) -> None:
@@ -752,31 +762,39 @@ class DeckGenerator:
         if len(prs.slides) < FORTUNEAI_MIN_SLIDES:
             raise ValueError(
                 f"FortuneAI_DeckTemplate must have at least {FORTUNEAI_MIN_SLIDES} "
-                f"slides (intro/narrative + 5 dividers + investment + thank you); "
+                f"slides (intro/narrative + dividers + investment + thank you); "
                 f"got {len(prs.slides)}"
             )
 
-        # Drop trailing extras (e.g. stock Print slide 20) so post-spine is
-        # investment + thank you only before we insert product clones.
+        # Trim optional tail after thank-you (e.g. stock slide 20).
         while len(prs.slides) > FORTUNEAI_MIN_SLIDES:
             self._delete_slide(prs, len(prs.slides) - 1)
 
-        first = FORTUNEAI_FIRST_DIVIDER_INDEX
-        # Delete unfunded dividers back-to-front so earlier indices stay stable.
-        for i in range(FORTUNEAI_DIVIDER_COUNT - 1, -1, -1):
-            if not groups[i]:
-                self._delete_slide(prs, first + i)
+        # Divider slides in the template file are not in Workflow pitch order.
+        # Clone dividers from a pristine copy, drop all stock dividers, then
+        # insert funded sections in Workflow order (13→17) before investment.
+        divider_src_prs, _ = self._load_fortuneai_template(template_url)
 
-        # Remaining dividers are packed starting at `first`. Insert A5 clones
-        # after each kept divider.
-        cursor = first
-        for refs in groups:
+        for idx in sorted(FORTUNEAI_DIVIDER_SLIDE_INDEX, reverse=True):
+            self._delete_slide(prs, idx)
+
+        insert_at = len(prs.slides) - 2  # before investment + thank you
+        pitch_slides: list[tuple[str, object]] = []
+        for i in range(FORTUNEAI_DIVIDER_COUNT):
+            refs = groups[i]
             if not refs:
                 continue
-            for j, ref in enumerate(refs):
-                self._clone_product_ref(ref, prs)
-                self._insert_slide_at(prs, cursor + 1 + j)
-            cursor += 1 + len(refs)
+            pitch_slides.append(("divider", i))
+            for ref in refs:
+                pitch_slides.append(("product", ref))
+
+        for kind, payload in reversed(pitch_slides):
+            if kind == "divider":
+                src_idx = FORTUNEAI_DIVIDER_SLIDE_INDEX[payload]
+                self._clone_slide(divider_src_prs, src_idx, prs)
+            else:
+                self._clone_product_ref(payload, prs)
+            self._insert_slide_at(prs, insert_at)
 
         sync_sections(prs)
         return prs
@@ -812,6 +830,7 @@ class DeckGenerator:
         warnings = apply_placeholders(
             prs, schema, audience=audience, logo_bytes=logo, ai=ai
         )
+        self._renumber_slide_parts(prs)
         buf = io.BytesIO()
         prs.save(buf)
         key = f"generated/{uuid4()}.pptx"

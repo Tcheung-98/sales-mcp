@@ -11,13 +11,25 @@ from dataclasses import dataclass
 
 from ingestion.gtm_product_map import normalize_category
 
-# 0-based index of the first category divider in FortuneAI_DeckTemplate.
-# Slides 1–12 (indices 0–11): intro + narrative spine.
-# Slides 13–17 (indices 12–16): five category dividers.
-# Slide 18 (index 17): investment; slide 19 (index 18): thank you.
-FORTUNEAI_FIRST_DIVIDER_INDEX = 12
+# Narrative spine: slides 1–12 (indices 0–11). Product dividers live at the
+# physical indices below (not sequential — matches FortuneAI_DeckTemplate on S3).
+# Pitch output order is still Workflow 13→17 via CATEGORY_DIVIDERS.
 FORTUNEAI_DIVIDER_COUNT = 5
-FORTUNEAI_MIN_SLIDES = 19  # through thank you
+FORTUNEAI_INVESTMENT_SLIDE_INDEX = 17
+FORTUNEAI_THANKS_SLIDE_INDEX = 18
+FORTUNEAI_MIN_SLIDES = FORTUNEAI_THANKS_SLIDE_INDEX + 1  # through thank you
+
+# category index 0..4 → physical divider slide index in FortuneAI_DeckTemplate
+FORTUNEAI_DIVIDER_SLIDE_INDEX: tuple[int, ...] = (
+    15,  # High-Impact Media
+    13,  # Editorial Alignment
+    14,  # Premium Video
+    16,  # Print
+    12,  # Branded Content
+)
+
+# Legacy alias — first physical divider index in the template file (not pitch order).
+FORTUNEAI_FIRST_DIVIDER_INDEX = min(FORTUNEAI_DIVIDER_SLIDE_INDEX)
 
 FORTUNEAI_TEMPLATE_BASENAME = "FortuneAI_DeckTemplate.pptx"
 _DEFAULT_FORTUNEAI_TEMPLATE_KEY = "templates/FortuneAI_DeckTemplate.pptx"

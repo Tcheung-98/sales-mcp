@@ -30,20 +30,22 @@ def _blank_bytes(slide_count: int = 1) -> bytes:
 
 
 def _fortuneai_template_bytes(*, extra_tail: int = 0) -> bytes:
-    """Minimal FortuneAI spine: 12 narrative + 5 dividers + investment + thank you.
-
-    Divider slides are titled DIV-0 .. DIV-4 so tests can assert which survived.
-    """
+    """Minimal FortuneAI spine matching S3 template divider positions."""
     prs = Presentation()
-    # Slides 1–12: intro + narrative
     for i in range(12):
         slide = prs.slides.add_slide(prs.slide_layouts[1])
         slide.shapes.title.text = f"SPINE-{i + 1}"
-    # Slides 13–17: category dividers
-    for i in range(5):
+    # Physical indices 12–16 (see FORTUNEAI_DIVIDER_SLIDE_INDEX).
+    divider_titles = {
+        12: "DIV-4",  # Branded Content
+        13: "DIV-1",  # Editorial Alignment
+        14: "DIV-2",  # Premium Video
+        15: "DIV-0",  # High-Impact Media
+        16: "DIV-3",  # Print
+    }
+    for idx in range(12, 17):
         slide = prs.slides.add_slide(prs.slide_layouts[1])
-        slide.shapes.title.text = f"DIV-{i}"
-    # Slide 18 investment, 19 thank you
+        slide.shapes.title.text = divider_titles[idx]
     inv = prs.slides.add_slide(prs.slide_layouts[1])
     inv.shapes.title.text = "INVESTMENT"
     ty = prs.slides.add_slide(prs.slide_layouts[1])
@@ -530,7 +532,7 @@ def test_assemble_omits_empty_dividers_and_keeps_order():
     assert titles[:12] == [f"SPINE-{i}" for i in range(1, 13)]
     assert titles[12] == "DIV-0"  # High-Impact Media
     assert titles[13] == "PRODUCT"
-    assert titles[14] == "DIV-3"  # Print (index 3 in divider list)
+    assert titles[14] == "DIV-3"  # Print
     assert titles[15] == "PRODUCT"
     assert titles[16] == "INVESTMENT"
     assert titles[17] == "THANK YOU"
@@ -539,6 +541,74 @@ def test_assemble_omits_empty_dividers_and_keeps_order():
     assert "DIV-4" not in titles
     assert "EXTRA-1" not in titles
     assert len(prs.slides) == 18
+
+
+
+def test_assemble_three_category_mix_keeps_workflow_order():
+    """Digital + 3 newsletters + branded: dividers 0→1→4, products under each."""
+    generator = _build_generator()
+    schema = _build_schema(
+        budgets=[{"amount": 400_000}],
+        confirmed_products=[
+            Product(
+                name="Crown Unit",
+                cadence="monthly",
+                price=100_000,
+                category="Digital Media",
+            ),
+            Product(
+                name="CEO Daily",
+                cadence="weekly",
+                price=75_000,
+                category="Newsletter",
+            ),
+            Product(
+                name="CFO Daily",
+                cadence="weekly",
+                price=60_000,
+                category="Newsletter",
+            ),
+            Product(
+                name="Workplace NL",
+                cadence="weekly",
+                price=70_000,
+                category="Newsletter",
+            ),
+            Product(
+                name="Dynamic Hub",
+                cadence="quarterly",
+                price=95_000,
+                category="Branded Content",
+            ),
+        ],
+    )
+    source_prs = _presentation_with_n_slides(1)
+    source_prs.slides[0].shapes.title.text = "PRODUCT"
+    product_map = _product_map_for(*schema.confirmed_products)
+
+    with (
+        patch("requests.get") as mock_get,
+        patch.object(generator, "_load_pptx", return_value=source_prs),
+    ):
+        mock_get.return_value.content = _fortuneai_template_bytes()
+        mock_get.return_value.raise_for_status = MagicMock()
+        prs = generator.assemble_skeleton(
+            schema, _FORTUNEAI_URL, product_map=product_map
+        )
+
+    titles = _slide_titles(prs)
+    assert titles[:12] == [f"SPINE-{i}" for i in range(1, 13)]
+    assert titles[12] == "DIV-0"
+    assert titles[13] == "PRODUCT"
+    assert titles[14] == "DIV-1"
+    assert titles[15:18] == ["PRODUCT", "PRODUCT", "PRODUCT"]
+    assert titles[18] == "DIV-4"
+    assert titles[19] == "PRODUCT"
+    assert titles[20] == "INVESTMENT"
+    assert titles[21] == "THANK YOU"
+    assert "DIV-2" not in titles
+    assert "DIV-3" not in titles
+    assert len(prs.slides) == 22
 
 
 def test_assemble_single_newsletter_keeps_editorial_divider_only():
@@ -629,8 +699,11 @@ def test_assemble_skeleton_clones_exact_slide_number():
         )
 
     mock_load.assert_called_with("product-decks/Fortune_Newsletters_2026.pptx")
-    mock_clone.assert_called_once()
-    assert mock_clone.call_args.args[1] == 2  # 0-based index for Slide #3
+    product_calls = [
+        c for c in mock_clone.call_args_list if c[0][1] == 2
+    ]
+    assert len(product_calls) == 1
+    assert product_calls[0].args[1] == 2  # 0-based index for Slide #3
     assert prs.slides[13].shapes.title.text == "SRC-3"
 
 
