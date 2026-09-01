@@ -19,8 +19,27 @@ from pptx.oxml.ns import qn
 from pptx.presentation import Presentation as PresentationType
 from pypdf import PdfReader
 
+from ingestion.audience_data import AudienceData, load_audience_data_from_s3
+from ingestion.category_dividers import (
+    CATEGORY_DIVIDERS,
+    FORTUNEAI_DIVIDER_COUNT,
+    FORTUNEAI_DIVIDER_SLIDE_INDEX,
+    FORTUNEAI_MIN_SLIDES,
+    FORTUNEAI_TEMPLATE_BASENAME,
+    divider_index_for_category,
+    fortuneai_template_key,
+    is_fortuneai_template_url,
+)
+from ingestion.gtm_product_map import (
+    GtmProductMap,
+    ProductSlideRef,
+    load_gtm_product_map_from_s3,
+    product_deck_s3_key,
+)
 from ingestion.manifest import SlideManifestEntry
-from ingestion.pptx_tools import apply_replacements, set_ph_text
+from ingestion.placeholder_ai import PlaceholderAI
+from ingestion.placeholder_fills import apply_placeholders, fetch_logo_bytes
+from ingestion.pptx_tools import apply_replacements, delete_slide, set_ph_text
 from ingestion.schema import DeckSchema
 
 logger = logging.getLogger(__name__)
@@ -30,10 +49,6 @@ _DEFAULT_MODEL = "claude-sonnet-4-6"
 _COST_PER_M_INPUT = 3.00
 _COST_PER_M_OUTPUT = 15.00
 
-# GTM template layout names — product placeholders sit after the capsule landmark.
-_WEAK_MATCH_THRESHOLD = 0.5
-_PRODUCT_SECTION_LANDMARK = "2_DARK BLUE/ BRIGHT BLUE CAPSULE"
-_PRODUCT_LAYOUT = "11_Title Only"
 _TEMPLATE_URL_HOST_SUFFIXES = (".sharepoint.com", ".sharepoint.us", ".microsoft.com")
 
 
@@ -141,6 +156,8 @@ class DeckGenerator:
         self._rulebook_text: str | None = None
         self._api_key: str | None = None
         self._rate_sheet: str | None = None
+        self._gtm_product_map: GtmProductMap | None = None
+        self._audience_data: AudienceData | None = None
 
     @staticmethod
     def _clone_slide(
@@ -151,13 +168,19 @@ class DeckGenerator:
         # Add a placeholder slide — gives us a proper slide part + sldIdLst entry
         new_slide = target_prs.slides.add_slide(target_prs.slide_layouts[0])
 
-        # Register slide-level image parts from source into target; build rId map
+        # Register slide-level image parts from source into target; build rId map.
+        # Copy image bytes into the target package — do not relate foreign parts
+        # (cross-presentation relate_to corrupts the OPC package on save).
         rId_map: dict[str, str] = {}
         for rId, rel in source_slide.part.rels.items():
-            if "image" in rel.reltype:
-                image_part = source_slide.part.related_part(rId)
-                new_rId = new_slide.part.relate_to(image_part, rel.reltype)
-                rId_map[rId] = new_rId
+            if "image" not in rel.reltype:
+                continue
+            image_part = source_slide.part.related_part(rId)
+            new_image_part = target_prs.part.package.get_or_add_image_part(
+                io.BytesIO(image_part.blob)
+            )
+            new_rId = new_slide.part.relate_to(new_image_part, rel.reltype)
+            rId_map[rId] = new_rId
 
         # Serialize source cSld, rewire rIds, re-parse with pptx element classes
         # (parse_xml, not etree.fromstring, so spTree and other pptx attrs are available)
@@ -195,11 +218,13 @@ class DeckGenerator:
 
     @staticmethod
     def _delete_slide(prs: PresentationType, slide_idx: int) -> None:
-        sld_id_lst = prs.slides._sldIdLst
-        sld_id = sld_id_lst[slide_idx]
-        r_id = sld_id.get(qn("r:id"))
-        prs.part.drop_rel(r_id)
-        sld_id_lst.remove(sld_id)
+        delete_slide(prs, slide_idx)
+
+    @staticmethod
+    def _renumber_slide_parts(prs: PresentationType) -> None:
+        """Assign contiguous slide partnames before save (avoids OPC duplicate warnings)."""
+        r_ids = [sld_id.get(qn("r:id")) for sld_id in prs.slides._sldIdLst]
+        prs.part.rename_slide_parts(r_ids)
 
     @staticmethod
     def _insert_slide_at(prs: PresentationType, position: int) -> None:
@@ -444,101 +469,178 @@ class DeckGenerator:
         output_prs.save(buf)
         return buf.getvalue()
 
-    def assemble_skeleton(
-        self, schema: DeckSchema, template_url: str, retriever
-    ) -> AssembledSkeleton:
-        """Clone narrative template + corpus product slides. No LLM, no S3 upload.
+    def _get_gtm_product_map(self) -> GtmProductMap:
+        if self._gtm_product_map is None:
+            self._gtm_product_map = load_gtm_product_map_from_s3(self._s3, self._bucket)
+        return self._gtm_product_map
 
-        Returns the Presentation plus product-clone provenance (slide index,
-        product name, corpus source path / slide number) for the B2 review package.
+    def _get_audience_data(self) -> AudienceData:
+        if self._audience_data is None:
+            self._audience_data = load_audience_data_from_s3(self._s3, self._bucket)
+        return self._audience_data
+
+    def _load_fortuneai_template(
+        self, template_url: str | None
+    ) -> tuple[PresentationType, str]:
+        """Load FortuneAI_DeckTemplate from SharePoint URL or S3.
+
+        Returns (presentation, template_key used in build payload).
+        Always returns a fresh Presentation — assembly mutates the deck.
         """
-        self._validate_template_url(template_url)
+        if template_url:
+            self._validate_template_url(template_url)
+            if not is_fortuneai_template_url(template_url):
+                raise ValueError(
+                    "template_url must point to FortuneAI_DeckTemplate "
+                    f"(got {template_url.split('?', 1)[0]!r})"
+                )
+            resp = requests.get(template_url, timeout=30)
+            resp.raise_for_status()
+            return Presentation(io.BytesIO(resp.content)), FORTUNEAI_TEMPLATE_BASENAME
 
-        resp = requests.get(template_url, timeout=30)
-        resp.raise_for_status()
-        prs = Presentation(io.BytesIO(resp.content))
-
-        # Product placeholders: 11_Title Only layouts after the capsule landmark
-        landmark_idx = next(
-            (
-                i
-                for i, s in enumerate(prs.slides)
-                if s.slide_layout.name == _PRODUCT_SECTION_LANDMARK
-            ),
-            None,
-        )
-        if landmark_idx is None:
+        key = fortuneai_template_key()
+        try:
+            resp = self._s3.get_object(Bucket=self._bucket, Key=key)
+            data = resp["Body"].read()
+        except Exception as exc:
             raise ValueError(
-                "Template missing product section landmark layout "
-                f"{_PRODUCT_SECTION_LANDMARK!r}"
-            )
-        product_indices = [
-            i
-            for i, s in enumerate(prs.slides)
-            if i > landmark_idx and s.slide_layout.name == _PRODUCT_LAYOUT
-        ]
-        if not product_indices:
-            raise ValueError(
-                "Template missing product slides with layout "
-                f"{_PRODUCT_LAYOUT!r} after landmark"
-            )
-        insertion_index = product_indices[0]
+                f"Failed to load FortuneAI template from "
+                f"s3://{self._bucket}/{key}: {exc}"
+            ) from exc
+        logger.info("loaded FortuneAI template from s3://%s/%s", self._bucket, key)
+        return Presentation(io.BytesIO(data)), FORTUNEAI_TEMPLATE_BASENAME
 
-        # Delete existing product slides back-to-front to preserve indices
-        for idx in sorted(product_indices, reverse=True):
-            self._delete_slide(prs, idx)
-
-        failures = []
-        best_candidates = []
+    def _group_products_by_divider(
+        self,
+        schema: DeckSchema,
+        gtm_map: GtmProductMap,
+    ) -> list[list[ProductSlideRef]]:
+        """Bucket confirmed products into the five Workflow dividers (A5 lookup)."""
+        groups: list[list[ProductSlideRef]] = [[] for _ in CATEGORY_DIVIDERS]
+        failures: list[str] = []
         for product in schema.confirmed_products:
-            candidates = retriever.search(product.name, k=8)
-            best_score = max((c["score"] for c in candidates), default=0.0)
-            if best_score < _WEAK_MATCH_THRESHOLD:
-                failures.append({"product": product.name, "best_score": best_score})
-            else:
-                best_candidates.append(max(candidates, key=lambda c: c["score"]))
-
+            try:
+                divider_i = divider_index_for_category(product.category)
+                ref = gtm_map.lookup(product.name, product.category)
+            except ValueError as exc:
+                failures.append(str(exc))
+                continue
+            groups[divider_i].append(ref)
         if failures:
             raise ValueError(
-                "No good corpus match for: "
-                + ", ".join(
-                    f"{f['product']} (score {f['best_score']:.2f})" for f in failures
-                )
+                "FortuneAI product placement failed: " + "; ".join(failures)
             )
+        return groups
 
-        product_clones: list[SlideManifestEntry] = []
-        for i, (product, best) in enumerate(
-            zip(schema.confirmed_products, best_candidates, strict=True)
-        ):
-            source_prs = self._load_pptx(best["source_path"])
-            new_slide = self._clone_slide(source_prs, best["slide_number"] - 1, prs)
-            self._insert_slide_at(prs, insertion_index + i)
-            self._dedup_shape_ids(new_slide, prs)
-            product_clones.append(
-                SlideManifestEntry(
-                    slide_index=insertion_index + i,
-                    role="product",
-                    product_name=product.name,
-                    source_path=best["source_path"],
-                    source_slide_number=best["slide_number"],
-                )
+    def _clone_product_ref(
+        self, ref: ProductSlideRef, target_prs: PresentationType
+    ):
+        s3_key = product_deck_s3_key(ref.deck_path)
+        try:
+            source_prs = self._load_pptx(s3_key)
+        except Exception as exc:
+            raise ValueError(
+                f"Failed to load Deck Path {ref.deck_path!r} for product "
+                f"{ref.product_name!r} (s3://{self._bucket}/{s3_key}): {exc}"
+            ) from exc
+        if ref.slide_number > len(source_prs.slides):
+            raise ValueError(
+                f"Slide # {ref.slide_number} out of range for product "
+                f"{ref.product_name!r} in {ref.deck_path!r} "
+                f"({len(source_prs.slides)} slides)"
             )
+        new_slide = self._clone_slide(source_prs, ref.slide_number - 1, target_prs)
+        self._dedup_shape_ids(new_slide, target_prs)
+        return new_slide
 
-        return AssembledSkeleton(
-            presentation=prs,
-            product_clones=tuple(product_clones),
-            client_name=schema.client_name,
-            template_key=_template_key_from_url(template_url),
-        )
+    def assemble_skeleton(
+        self,
+        schema: DeckSchema,
+        template_url: str | None = None,
+        product_map: GtmProductMap | None = None,
+    ) -> PresentationType:
+        """Assemble FortuneAI spine + conditional dividers + exact GTM product clones.
 
-    def build(self, schema: DeckSchema, template_url: str, retriever) -> dict:
-        """Assemble skeleton PPTX and upload. Returns a 24h presigned S3 URL.
-
-        No LLM copy writing. template_url is a pre-authenticated SharePoint download
-        URL resolved by Prodie.
+        Keeps intro/narrative/investment/thank-you stock (C2 fills in ``build``). Inserts
+        category dividers only when ≥1 funded product maps to that section. Product
+        pages are wholesale A5 clones — no AI edits.
         """
-        assembled = self.assemble_skeleton(schema, template_url, retriever)
-        prs = assembled.presentation
+        gtm_map = product_map if product_map is not None else self._get_gtm_product_map()
+        # Resolve placement before mutating the template so map misses fail loud early.
+        groups = self._group_products_by_divider(schema, gtm_map)
+        prs, _template_key = self._load_fortuneai_template(template_url)
+
+        if len(prs.slides) < FORTUNEAI_MIN_SLIDES:
+            raise ValueError(
+                f"FortuneAI_DeckTemplate must have at least {FORTUNEAI_MIN_SLIDES} "
+                f"slides (intro/narrative + dividers + investment + thank you); "
+                f"got {len(prs.slides)}"
+            )
+
+        # Trim optional tail after thank-you (e.g. stock slide 20).
+        while len(prs.slides) > FORTUNEAI_MIN_SLIDES:
+            self._delete_slide(prs, len(prs.slides) - 1)
+
+        # Divider slides in the template file are not in Workflow pitch order.
+        # Clone dividers from a pristine copy, drop all stock dividers, then
+        # insert funded sections in Workflow order (13→17) before investment.
+        divider_src_prs, _ = self._load_fortuneai_template(template_url)
+
+        for idx in sorted(FORTUNEAI_DIVIDER_SLIDE_INDEX, reverse=True):
+            self._delete_slide(prs, idx)
+
+        insert_at = len(prs.slides) - 2  # before investment + thank you
+        pitch_slides: list[tuple[str, object]] = []
+        for i in range(FORTUNEAI_DIVIDER_COUNT):
+            refs = groups[i]
+            if not refs:
+                continue
+            pitch_slides.append(("divider", i))
+            for ref in refs:
+                pitch_slides.append(("product", ref))
+
+        for kind, payload in reversed(pitch_slides):
+            if kind == "divider":
+                src_idx = FORTUNEAI_DIVIDER_SLIDE_INDEX[payload]
+                self._clone_slide(divider_src_prs, src_idx, prs)
+            else:
+                self._clone_product_ref(payload, prs)
+            self._insert_slide_at(prs, insert_at)
+
+        return prs
+
+    def build(
+        self,
+        schema: DeckSchema,
+        template_url: str | None = None,
+        product_map: GtmProductMap | None = None,
+        audience_data: AudienceData | None = None,
+        logo_bytes: bytes | None = None,
+    ) -> dict:
+        """Assemble FortuneAI PPTX, fill placeholders, upload.
+
+        template_url: optional pre-authenticated SharePoint download URL for
+        FortuneAI_DeckTemplate. When omitted, loads from S3 (FORTUNEAI_TEMPLATE_KEY).
+        Product pages use exact GTM Deck Path / Slide #. C2 fills date, logo,
+        history, audience Reach/Index, program types, investment, and bounded
+        Claude copy for intro, Opportunity, audience title, and program blurbs.
+        No stylist.
+        """
+        prs = self.assemble_skeleton(schema, template_url, product_map=product_map)
+        audience = (
+            audience_data if audience_data is not None else self._get_audience_data()
+        )
+        logo = (
+            logo_bytes if logo_bytes is not None else fetch_logo_bytes(schema.client_logo)
+        )
+        ai = PlaceholderAI.from_anthropic(
+            anthropic.Anthropic(api_key=self._get_api_key()),
+            model=self._model,
+        )
+        warnings = apply_placeholders(
+            prs, schema, audience=audience, logo_bytes=logo, ai=ai
+        )
+        self._renumber_slide_parts(prs)
         buf = io.BytesIO()
         prs.save(buf)
         key = f"generated/{uuid4()}.pptx"
@@ -548,11 +650,12 @@ class DeckGenerator:
             Params={"Bucket": self._bucket, "Key": key},
             ExpiresIn=86400,
         )
-        logger.info("skeleton deck uploaded to s3://%s/%s", self._bucket, key)
+        logger.info("deck uploaded to s3://%s/%s", self._bucket, key)
         return {
             "download_url": url,
-            "slide_count": assembled.slide_count,
-            "client_name": assembled.client_name,
-            "template_key": assembled.template_key,
+            "slide_count": len(prs.slides),
+            "client_name": schema.client_name,
+            "template_key": FORTUNEAI_TEMPLATE_BASENAME,
+            "warnings": warnings,
         }
 

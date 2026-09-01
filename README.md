@@ -1,8 +1,8 @@
 # sales-mcp
 
-Internal Python MCP server that powers Prodie's pitch deck generation for Fortune sales associates.
-Associates have a conversation with Prodie about a client, confirm the product selection and budget,
-and Prodie uses this server to generate a Fortune-branded PPTX from the real closed-won corpus.
+Internal Python MCP server that **builds** Fortune pitch decks (`build_deck`).
+Associates fill Discovery in Prodie; Prodie shows relevant products; the associate checks the mix;
+Prodie passes the locked spec here. This server does **not** choose products.
 
 Live endpoint: `https://fortune-sales-mcp.tj3ek8xjdg9br.us-east-1.cs.amazonlightsail.com`
 
@@ -33,6 +33,9 @@ cp .env.example .env
 | `ANTHROPIC_API_KEY` | Anthropic API key (local dev only — prod uses Secrets Manager) |
 | `MCP_SHARED_SECRET` | Bearer token for Cowork → MCP auth |
 | `RULEBOOK_KEY` | S3 key for Fortune GTM skill doc (default: `templates/rulebook.docx`) |
+| `GTM_DATABASE_KEY` | S3 key for `Fortune_AITool_GTM_Database.xlsx` (default: `templates/Fortune_AITool_GTM_Database.xlsx`) |
+| `PRODUCT_DECKS_PREFIX` | S3 prefix for Hunter product decks referenced by Deck Path (default: `product-decks/`) |
+| `FORTUNEAI_TEMPLATE_KEY` | S3 key for Creation spine (default: `templates/FortuneAI_DeckTemplate.pptx`) |
 | `TEMPLATE_URL_ALLOWED_HOSTS` | Optional extra hosts for `build_deck` template URLs (comma-separated) |
 
 ---
@@ -134,17 +137,94 @@ curl -s -X POST https://fortune-sales-mcp.tj3ek8xjdg9br.us-east-1.cs.amazonlight
 programmatically. Visual quality (typography, shapes, imagery) is preserved from the source.
 Client-specific text is replaced post-clone via placeholder targeting.
 
-**Schema-driven generation** — deck generation requires a fully hydrated `DeckSchema` (client,
-industry, budget, confirmed products). Prodie enforces sufficiency during conversation; the server
-validates independently via Pydantic and selects the SharePoint template filename from industry,
-franchise keywords, and product names.
+**Schema-driven generation** — deck generation requires a fully hydrated `DeckSchema`
+(Discovery intake + confirmed products). `DiscoverySchema` covers Workflow Discovery fields.
+`DeckSchema` extends it with non-empty `confirmed_products` for Creation. **Prodie** proposes the
+mix (Fortune Logic Guide V1 + GTM/inventory) and enforces sufficiency; this server validates
+independently via Pydantic and clones exact GTM `Deck Path` / `Slide #` into FortuneAI_DeckTemplate.
+It does **not** choose products.
 
-**Schema validation + skeleton assembly** — `prepare_deck(schema)` validates the handoff payload
-and returns the template filename for AE review. `build_deck(schema, template_url)` fetches the
-SharePoint template, swaps product placeholders with corpus clones, and returns a presigned PPTX
-URL. Clone lives in `DeckGenerator.assemble_skeleton` (Anthropic-free); apply helpers live in
-`ingestion/pptx_tools.py` for the future Cursor stylist. Skeleton only for now — no LLM copy or
-stylist pass yet.
+**Discovery ↔ Creation handoff (PI-2758)** — field map for Prodie / Sales HQ forms:
+
+| Workflow / form field | Schema field | Required |
+| --- | --- | --- |
+| Company name | `company_name` (alias `client_name`) | yes |
+| Industry | `industry` | yes |
+| Budget (up to 3 tiers) | `budgets[].amount` (+ optional `label`) | yes (1–3) |
+| Flight dates | `flight_dates.start` / `.end` | yes |
+| Campaign goal | `campaign_goal` | yes |
+| Targeting details | `targeting_details` | yes |
+| KPIs | `kpis` | yes |
+| KPI details | `kpi_details` | yes |
+| Campaign narrative | `campaign_narrative` | yes |
+| Preferred platforms/products | `preferred_platforms_products` | yes |
+| Additional RFP details | `additional_rfp_details` | yes |
+| Client logo | `client_logo` (URL or SharePoint path) | yes |
+| Platform/product specifics | `platform_or_product_specifics` | no |
+| Confirmed mix (Ideation out) | `confirmed_products` | Creation only |
+
+Industry enum (Workflow): Technology, Professional Services, Healthcare, Financial Services,
+Energy, Lifestyle, Luxury. Legacy `Tech` normalizes to `Technology`. Legacy
+`budget_quarterly` still shims to a single budget tier. Escalation uses the max tier amount
+(≥ $750k → GTM).
+
+**Propose + select (MVP)** — Prodie shows relevant products (Logic Guide V1 + GTM + inventory)
+and the associate checks the mix. This server does **not** pick products. `propose_mix` is an
+optional rules-only baseline, not the associate path. After lock, pass the spec to `build_deck`
+(optional `confirm_mix` validates names/prices/availability only).
+
+**FortuneAI assembly + C2 fills (C1 / PI-2756 + C2 / PI-2757)** — `build_deck(schema, template_url?)`
+validates the handoff and assembles from **FortuneAI_DeckTemplate** (not industry
+`Category_Presentation_*`). Optional `template_url` must name FortuneAI_DeckTemplate
+(SharePoint download URL); when omitted, the template loads from S3
+(`FORTUNEAI_TEMPLATE_KEY`). **C1** (`assemble_skeleton`, Anthropic-free): keeps intro /
+narrative / investment / thank-you stock layout; inserts category dividers **only when ≥1
+funded product** maps to that section (fixed order: High-Impact Media → Editorial Alignment →
+Premium Video → Print → Branded Content); product pages under each divider are **exact** GTM
+Product Tags clones (`Deck Path` + `Slide #`). **C2** (`apply_placeholders` after assembly):
+fills date/logo/history/audience metrics/program types/investment/thanks, bounded Claude for
+named narrative slots, drops unused audience/program variant pages. Events / Conference products
+fail loud (GTM escalate). Missing or ambiguous map rows fail loud (no Titan substitute). No
+stylist (PI-2754 shelved).
+
+**Per-slide fill method (FortuneAI stock spine, pre-product insert):**
+
+| Slide role | Method | Source |
+|---|---|---|
+| Intro | AI + data + logo | Claude `[TITLE]`; generate-time Month/Year `[DATE]`; HTTPS `client_logo` |
+| Why Fortune | Stock | Unchanged |
+| History of Trust | Stock + swap | `[client name]` → `company_name` |
+| Opportunity | AI | Claude `[HEADER]` + `[BODY]` |
+| Audience (one variant kept) | AI + data | Claude `[AUDIENCE TITLE]`; Reach/Index from Audience Data |
+| Program Overview (one variant kept) | AI + data | Divider names as `PRODUCT TYPE`; Claude program blurbs (1-category: second box is stock Fortune sentence) |
+| Category dividers | Stock (C1) | Conditional insert only |
+| Product pages | Master Deck Pull (A5) | Exact GTM `Deck Path` + `Slide #` clone |
+| Investment | Data pull + math | Mix sum `[BUDGET]`; per-category bullets; budget mismatch fails loud |
+| Thank You | Stock + data + logo | Same date/logo as intro |
+
+**GTM workbook (A5 + C2)** — sync the Hunter workbook and decks it names into S3 before build:
+
+- Object: `GTM_DATABASE_KEY` (default `templates/Fortune_AITool_GTM_Database.xlsx`)
+- **Product Tags** sheet → exact product slide map (A5)
+- **Audience Data** sheet → segment / Reach / Index for audience cards (C2); matched via
+  `targeting_details`; never invent metrics
+
+Product Tags lookup and Audience Data load are separate passes over the same xlsx.
+
+**GTM product slide map (A5 / PI-2541)** — Product pages are deterministic:
+
+- Lookup: exact `Product Name` + `Product Category` (schema aliases: `Newsletter`→`Newsletters`,
+  `Digital Media`→`Digital Ads/Programmatic`)
+- Binaries: `product-decks/{Deck Path}` (adds `.pptx` when the sheet omits the extension)
+
+Known Product Tags coverage gaps (flag for GTM; do not invent substitutes):
+
+- Print is sparse (only Full Page); Deck Path is `FortuneAI_DeckTemplate` (no `.pptx` in sheet)
+- Many Digital Ads section/sub-section takeovers share Slide #9 on High Impact Media
+- Duplicate Branded Content rows (same name/path/slide, different GTM TAGS) — deduped as one
+- `Term Sheet` / `Next To Lead` appear in both Newsletters and Vodcasts — category required
+- No Events / Conferences / Lists rows in Product Tags today
+- Schema still allows `Events` while the sheet may not have a matching category yet
 
 **Slide render for vision QA (B1)** — `ingestion.render_slides.render_slides(pptx, slide_indices)`
 converts selected 0-based slides to PNGs via LibreOffice headless (`soffice`) → PDF →

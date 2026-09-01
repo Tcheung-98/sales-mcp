@@ -4,16 +4,24 @@ from server import (
     build_deck,
     filter_decks_by_tags,
     get_slide_content,
-    prepare_deck,
     search_decks,
 )
 
 
 def _valid_schema(**overrides) -> dict:
     base = {
-        "client_name": "Acme Corp",
-        "industry": "Tech",
-        "budget_quarterly": 50_000.0,
+        "company_name": "Acme Corp",
+        "industry": "Technology",
+        "budgets": [{"amount": 50_000.0}],
+        "flight_dates": {"start": "2026-09-01", "end": "2026-12-31"},
+        "campaign_goal": "Drive consideration among enterprise buyers",
+        "targeting_details": "US enterprise tech decision-makers",
+        "kpis": ["Awareness", "Engagement"],
+        "kpi_details": "Lift brand awareness 10%; engagement rate above benchmark",
+        "campaign_narrative": "Acme helps mid-market CFOs modernize finance ops",
+        "preferred_platforms_products": ["Newsletters", "Branded Content"],
+        "additional_rfp_details": "Prefer Q4 flight; avoid holiday blackout weeks",
+        "client_logo": "https://example.com/acme-logo.png",
         "confirmed_products": [
             {
                 "name": "CIO Intelligence Newsletter",
@@ -58,72 +66,63 @@ def test_get_slide_content_no_slide_numbers(mocker):
     mock_retriever.get_slide_content.assert_called_once_with("d1", None)
 
 
-def test_prepare_deck_valid_returns_template_filename():
-    result = prepare_deck(schema=_valid_schema())
-    assert result["status"] == "ok"
-    assert "template_filename" in result
-    assert result["template_filename"].endswith(".pptx.url")
-
-
-def test_prepare_deck_missing_fields_returns_incomplete():
-    result = prepare_deck(schema={"client_name": "Acme Corp"})
-    assert result["status"] == "incomplete"
-    assert "industry" in result["missing"]
-    assert "budget_quarterly" in result["missing"]
-
-
-def test_prepare_deck_escalation_budget():
-    result = prepare_deck(schema=_valid_schema(budget_quarterly=750_000))
-    assert result["status"] == "escalation"
-    assert "GTM" in result["message"]
-
-
 def test_build_deck_delegates_to_generator(mocker):
     fake_result = {
         "download_url": "https://example.com/test.pptx",
         "slide_count": 25,
         "client_name": "Acme Corp",
-        "template_key": "template.pptx",
+        "template_key": "FortuneAI_DeckTemplate.pptx",
     }
     mock_generator = MagicMock()
     mock_generator.build.return_value = fake_result
-    mock_retriever = MagicMock()
     mocker.patch("server._get_generator", return_value=mock_generator)
-    mocker.patch("server._get_retriever", return_value=mock_retriever)
     result = build_deck(
         schema=_valid_schema(),
-        template_url="https://fortune.sharepoint.com/template.pptx",
+        template_url="https://fortune.sharepoint.com/FortuneAI_DeckTemplate.pptx",
     )
     mock_generator.build.assert_called_once()
     assert result == fake_result
 
 
+def test_build_deck_allows_omitted_template_url(mocker):
+    fake_result = {
+        "download_url": "https://example.com/test.pptx",
+        "slide_count": 16,
+        "client_name": "Acme Corp",
+        "template_key": "FortuneAI_DeckTemplate.pptx",
+    }
+    mock_generator = MagicMock()
+    mock_generator.build.return_value = fake_result
+    mocker.patch("server._get_generator", return_value=mock_generator)
+    result = build_deck(schema=_valid_schema())
+    mock_generator.build.assert_called_once()
+    assert mock_generator.build.call_args.args[1] is None
+    assert result == fake_result
+
+
 def test_build_deck_escalation_budget():
     result = build_deck(
-        schema=_valid_schema(budget_quarterly=750_000),
-        template_url="https://fortune.sharepoint.com/template.pptx",
+        schema=_valid_schema(budgets=[{"amount": 750_000}]),
+        template_url="https://fortune.sharepoint.com/FortuneAI_DeckTemplate.pptx",
     )
     assert result["status"] == "escalation"
     assert "GTM" in result["message"]
 
 
 def test_build_deck_incomplete_schema():
-    result = build_deck(
-        schema={"client_name": "Acme Corp"},
-        template_url="https://fortune.sharepoint.com/template.pptx",
-    )
+    result = build_deck(schema={"company_name": "Acme Corp"})
     assert result["status"] == "incomplete"
     assert "industry" in result["missing"]
+    assert "budgets" in result["missing"]
 
 
 def test_build_deck_assembly_error(mocker):
     mock_generator = MagicMock()
     mock_generator.build.side_effect = ValueError("host not allowed")
     mocker.patch("server._get_generator", return_value=mock_generator)
-    mocker.patch("server._get_retriever", return_value=MagicMock())
     result = build_deck(
         schema=_valid_schema(),
-        template_url="https://evil.example.com/template.pptx",
+        template_url="https://evil.example.com/FortuneAI_DeckTemplate.pptx",
     )
     assert result["status"] == "error"
     assert "host not allowed" in result["message"]
