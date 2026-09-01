@@ -543,6 +543,7 @@ def test_assemble_omits_empty_dividers_and_keeps_order():
     assert len(prs.slides) == 18
 
 
+
 def test_assemble_three_category_mix_keeps_workflow_order():
     """Digital + 3 newsletters + branded: dividers 0→1→4, products under each."""
     generator = _build_generator()

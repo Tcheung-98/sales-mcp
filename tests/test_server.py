@@ -1,9 +1,12 @@
+import asyncio
 from unittest.mock import MagicMock
 
 from server import (
     build_deck,
+    confirm_mix,
     filter_decks_by_tags,
     get_slide_content,
+    mcp,
     search_decks,
 )
 
@@ -33,6 +36,12 @@ def _valid_schema(**overrides) -> dict:
     }
     base.update(overrides)
     return base
+
+
+def test_mcp_exposes_no_product_proposal_tool():
+    names = {tool.name for tool in asyncio.run(mcp.list_tools())}
+    assert "propose_mix" not in names
+    assert {"confirm_mix", "build_deck"} <= names
 
 
 def test_search_decks_delegates_to_retriever(mocker):
@@ -142,3 +151,26 @@ def test_filter_decks_by_tags_delegates_to_retriever(mocker):
         client_name=None, date_from=None, date_to=None, deck_type="Pitch", limit=5,
     )
     assert results == fake_results
+
+
+def test_confirm_mix_delegates_flat_selection(mocker):
+    fake = {
+        "status": "ok",
+        "deck_schema": _valid_schema(),
+        "warnings": [],
+        "confirmed_products": _valid_schema()["confirmed_products"],
+        "mix_total": 35_000,
+    }
+    mocker.patch("server._get_product_catalogs", return_value=(MagicMock(), MagicMock()))
+    wrapper = mocker.patch("server.confirm_mix_from_dict", return_value=fake)
+    result = confirm_mix(
+        discovery=_valid_schema(),
+        selected_products=[
+            {"name": "CIO Intelligence Newsletter", "category": "Newsletters"}
+        ],
+    )
+    assert result["status"] == "ok"
+    assert result["deck_schema"]["company_name"] == "Acme Corp"
+    payload = wrapper.call_args.args[0]
+    assert set(payload) == {"discovery", "selected_products"}
+    assert payload["selected_products"][0]["name"] == "CIO Intelligence Newsletter"

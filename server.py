@@ -1,5 +1,6 @@
 import os
 
+import boto3
 import requests
 from mcp.server.fastmcp import FastMCP
 from mcp.server.fastmcp.server import TransportSecuritySettings
@@ -8,7 +9,16 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import JSONResponse
 from starlette.routing import Route
 
+from ingestion.confirm_mix import confirm_mix_from_dict
 from ingestion.generator import DeckGenerator
+from ingestion.gtm_ideation_catalog import (
+    GtmIdeationCatalog,
+    load_gtm_ideation_catalog_from_s3,
+)
+from ingestion.inventory_workbook import (
+    InventoryWorkbook,
+    load_inventory_workbook_from_s3,
+)
 from ingestion.retriever import SlideRetriever
 from ingestion.schema import BUDGET_ESCALATION_ERROR, DeckSchema
 
@@ -34,6 +44,8 @@ mcp = FastMCP(
 
 _retriever: SlideRetriever | None = None
 _generator: DeckGenerator | None = None
+_ideation_gtm: GtmIdeationCatalog | None = None
+_ideation_inventory: InventoryWorkbook | None = None
 
 
 def _get_retriever() -> SlideRetriever:
@@ -48,6 +60,40 @@ def _get_generator() -> DeckGenerator:
     if _generator is None:
         _generator = DeckGenerator()
     return _generator
+
+
+def _get_product_catalogs() -> tuple[GtmIdeationCatalog, InventoryWorkbook]:
+    """Load authoritative GTM, pricing, and availability data for validation."""
+    global _ideation_gtm, _ideation_inventory
+    if _ideation_gtm is None or _ideation_inventory is None:
+        s3 = boto3.client("s3")
+        bucket = os.environ["S3_SNAPSHOT_BUCKET"]
+        _ideation_gtm = load_gtm_ideation_catalog_from_s3(s3, bucket)
+        _ideation_inventory = load_inventory_workbook_from_s3(s3, bucket)
+    assert _ideation_gtm is not None and _ideation_inventory is not None
+    return _ideation_gtm, _ideation_inventory
+
+
+@mcp.tool()
+def confirm_mix(
+    discovery: dict,
+    selected_products: list[dict],
+) -> dict:
+    """
+    Validate and lock the associate's final Prodie checkbox selection.
+
+    This tool does not propose, rank, score, fund, swap, or add products. Pass the
+    complete final list as [{name, category?}, ...]. Product names must exactly
+    match GTM Product Tags; category disambiguates duplicate names. The server
+    resolves authoritative price/cadence, validates flight availability, and
+    returns deck_schema ready for build_deck.
+    """
+    gtm, inventory = _get_product_catalogs()
+    payload = {
+        "discovery": discovery,
+        "selected_products": selected_products,
+    }
+    return confirm_mix_from_dict(payload, gtm=gtm, inventory=inventory)
 
 
 @mcp.tool()
@@ -107,7 +153,8 @@ def build_deck(schema: dict, template_url: str | None = None) -> dict:
     """
     Assemble a Fortune pitch deck from a confirmed schema (C1 spine + C2 fills).
 
-    Always uses FortuneAI_DeckTemplate as the Creation spine (intro / narrative /
+    Does not choose products — pass a seller-locked mix (Prodie + I3). Always uses
+    FortuneAI_DeckTemplate as the Creation spine (intro / narrative /
     conditional category dividers / investment / thank you). Product pages are
     exact GTM Product Tags clones (Deck Path + Slide #).
 

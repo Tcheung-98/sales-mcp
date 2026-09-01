@@ -1,10 +1,13 @@
 # sales-mcp
 
-Internal Python MCP server that **builds** Fortune pitch decks (`build_deck`).
-Associates fill Discovery in Prodie; Prodie shows relevant products; the associate checks the mix;
-Prodie passes the locked spec here. This server does **not** choose products.
+Internal Python MCP server that powers Prodie's pitch deck **Creation** for Fortune sales associates.
+Associates fill a Discovery form (optionally informed by a SalesGPT conversation). **Prodie** proposes
+relevant, priced, available products; the associate confirms via checkboxes. This server then
+generates a Fortune-branded PPTX (FortuneAI spine + exact Hunter product-slide clones).
+It does **not** choose the mix. Prodie does **not** assemble the PPTX.
 
-Live endpoint: `https://fortune-sales-mcp.tj3ek8xjdg9br.us-east-1.cs.amazonlightsail.com`
+End-scope SoT (sales-mcp checkout): `local/schema-driven-deck-generation-engine/END-SCOPE-SOT.md`.  
+**Prodie Ideation spec:** [`docs/PRODIE-IDEATION-SPEC.md`](docs/PRODIE-IDEATION-SPEC.md) — Prodie menu + select; this server `build_deck`.
 
 ---
 
@@ -34,6 +37,7 @@ cp .env.example .env
 | `MCP_SHARED_SECRET` | Bearer token for Cowork → MCP auth |
 | `RULEBOOK_KEY` | S3 key for Fortune GTM skill doc (default: `templates/rulebook.docx`) |
 | `GTM_DATABASE_KEY` | S3 key for `Fortune_AITool_GTM_Database.xlsx` (default: `templates/Fortune_AITool_GTM_Database.xlsx`) |
+| `INVENTORY_CALENDAR_KEY` | S3 key for inventory + pricing workbook (default: `templates/Fortune_Inventory_Reservation_Calendar_2026_Final.xlsx`) |
 | `PRODUCT_DECKS_PREFIX` | S3 prefix for Hunter product decks referenced by Deck Path (default: `product-decks/`) |
 | `FORTUNEAI_TEMPLATE_KEY` | S3 key for Creation spine (default: `templates/FortuneAI_DeckTemplate.pptx`) |
 | `TEMPLATE_URL_ALLOWED_HOSTS` | Optional extra hosts for `build_deck` template URLs (comma-separated) |
@@ -140,9 +144,8 @@ Client-specific text is replaced post-clone via placeholder targeting.
 **Schema-driven generation** — deck generation requires a fully hydrated `DeckSchema`
 (Discovery intake + confirmed products). `DiscoverySchema` covers Workflow Discovery fields.
 `DeckSchema` extends it with non-empty `confirmed_products` for Creation. **Prodie** proposes the
-mix (Fortune Logic Guide V1 + GTM/inventory) and enforces sufficiency; this server validates
-independently via Pydantic and clones exact GTM `Deck Path` / `Slide #` into FortuneAI_DeckTemplate.
-It does **not** choose products.
+mix (Logic Guide V1 + GTM/inventory) and enforces sufficiency; this server validates independently
+via Pydantic and clones exact GTM `Deck Path` / `Slide #` pages into FortuneAI_DeckTemplate.
 
 **Discovery ↔ Creation handoff (PI-2758)** — field map for Prodie / Sales HQ forms:
 
@@ -168,10 +171,18 @@ Energy, Lifestyle, Luxury. Legacy `Tech` normalizes to `Technology`. Legacy
 `budget_quarterly` still shims to a single budget tier. Escalation uses the max tier amount
 (≥ $750k → GTM).
 
-**Propose + select (MVP)** — Prodie shows relevant products (Logic Guide V1 + GTM + inventory)
-and the associate checks the mix. This server does **not** pick products. `propose_mix` is an
-optional rules-only baseline, not the associate path. After lock, pass the spec to `build_deck`
-(optional `confirm_mix` validates names/prices/availability only).
+**Propose + select (MVP) vs this server** — Prodie shows a relevant-product menu (Logic Guide V1 +
+GTM + inventory). Associates lock via checkboxes; then pass the spec to `build_deck`
+(`confirm_mix` validates names/prices/availability first).
+There is **no `propose_mix` MCP tool**. The in-repo Logic Guide modules remain isolated
+reference/test code and are not part of the associate runtime.
+
+**Creation lock (I3 / PI-2761)** — `confirm_mix(discovery, selected_products)` accepts the
+associate's complete checkbox list as `[{name, category?}, ...]`. It does not accept prices,
+tiers, swaps, scores, or ranking instructions. The server resolves exact GTM identity plus
+authoritative price/cadence and flight availability, then returns `deck_schema` with
+`confirmed_products` for `build_deck`. Conference / Lists platforms return
+`status: escalation` (do not build). Unavailable products cannot be confirmed in MVP.
 
 **FortuneAI assembly + C2 fills (C1 / PI-2756 + C2 / PI-2757)** — `build_deck(schema, template_url?)`
 validates the handoff and assembles from **FortuneAI_DeckTemplate** (not industry
@@ -211,6 +222,15 @@ stylist (PI-2754 shelved).
 
 Product Tags lookup and Audience Data load are separate passes over the same xlsx.
 
+**Ideation data sources (I1 / PI-2759)** — Prodie reads GTM DB +
+inventory calendar + pricing from S3 snapshots (SharePoint is human SoT). Access path, sheet
+contract, sync/ownership, and env defaults: [`local/schema-driven-deck-generation-engine/I1-DATA-SOURCES.md`](local/schema-driven-deck-generation-engine/I1-DATA-SOURCES.md).
+Canonical keys: `ingestion/ideation_data_keys.py`. **Chunk B:** `ingestion/gtm_ideation_catalog.py`
+loads Product Category + Product Tags (`GTM TAGS` column) from the same xlsx; **Chunk C:**
+`ingestion/inventory_calendar.py` loads Products + Inventory tabs for flight availability;
+**Chunk D:** `ingestion/inventory_pricing.py` + `inventory_workbook.py` for rates.
+Creation already uses Product Tags + Audience Data from `GTM_DATABASE_KEY`.
+
 **GTM product slide map (A5 / PI-2541)** — Product pages are deterministic:
 
 - Lookup: exact `Product Name` + `Product Category` (schema aliases: `Newsletter`→`Newsletters`,
@@ -223,39 +243,29 @@ Known Product Tags coverage gaps (flag for GTM; do not invent substitutes):
 - Many Digital Ads section/sub-section takeovers share Slide #9 on High Impact Media
 - Duplicate Branded Content rows (same name/path/slide, different GTM TAGS) — deduped as one
 - `Term Sheet` / `Next To Lead` appear in both Newsletters and Vodcasts — category required
-- No Events / Conferences / Lists rows in Product Tags today
-- Schema still allows `Events` while the sheet may not have a matching category yet
 
-**Slide render for vision QA (B1)** — `ingestion.render_slides.render_slides(pptx, slide_indices)`
-converts selected 0-based slides to PNGs via LibreOffice headless (`soffice`) → PDF →
-`pdftoppm`. Used later by Cursor agent scripts / the B2 review package; not an MCP tool.
-Requires LibreOffice + poppler-utils in the Docker image (or locally). Optional `SOFFICE_BIN`
-overrides the binary path.
+**Titan / RAG (legacy)** — `search_decks`, `filter_decks_by_tags`, and corpus embeddings remain
+for research and ingest. They are **not** the associate Creation path (exact GTM map only).
 
-```python
-from ingestion.render_slides import render_slides
+---
 
-pngs = render_slides("draft.pptx", [0, 2], output_dir="/tmp/qa")
-# → [/tmp/qa/slide-000.png, /tmp/qa/slide-002.png]
-```
+## MCP tools
 
-CLI (same pipeline; for agent scripts):
+| Tool | Purpose |
+|---|---|
+| `build_deck` | FortuneAI assembly + C2 fills → presigned PPTX URL |
+| `confirm_mix` | Validate locked product list → `deck_schema` for `build_deck` |
+| `search_decks` | Semantic slide search (research; not associate picker) |
+| `filter_decks_by_tags` | Tag filter on corpus metadata |
+| `get_slide_content` | Fetch slide text for a deck id |
 
-```bash
-uv run python -m ingestion.render_slides draft.pptx -i 0,2 -o /tmp/qa
-```
+---
 
-**In-memory vector search** — embeddings loaded into numpy at startup, cosine similarity at query
-time. No FAISS index; the corpus (2,404 slides) is small enough that in-memory search is fast and
-removes a dependency.
+## Repo layout
 
-**Streamable HTTP transport** — SSE dropped because Lightsail's load balancer rewrites the `Host`
-header, triggering the MCP SDK's DNS-rebinding protection with 421 errors. DNS-rebinding protection
-disabled at the SDK level via `TransportSecuritySettings`; the LB is the trust boundary.
-
-**Anthropic API (not Bedrock Claude)** — generation uses the Anthropic API directly. Bedrock is
-used only for embeddings (Titan Text v2). API key stored in AWS Secrets Manager; local dev uses
-`ANTHROPIC_API_KEY` env var.
-
-**Python + FastMCP** — official MCP Python SDK (`mcp[cli]`). Do not use the standalone `fastmcp`
-PyPI package; the SDK ships `mcp.server.fastmcp.FastMCP` directly.
+- `server.py` — FastMCP app + tool handlers
+- `ingestion/generator.py` — FortuneAI assembly (`assemble_skeleton`, `build`)
+- `ingestion/placeholder_fills.py` — C2 deterministic + AI placeholder fills
+- `ingestion/gtm_product_map.py` — A5 exact product slide map
+- `ingestion/schema.py` — Discovery + Deck Pydantic models
+- `tests/` — unit tests (no live S3/Anthropic in default suite)
