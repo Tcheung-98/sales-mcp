@@ -1,6 +1,7 @@
 import asyncio
 from unittest.mock import MagicMock
 
+from ingestion.deck_qa import DeckQaError, QaCheckResult, QaReport
 from server import (
     build_deck,
     confirm_mix,
@@ -135,6 +136,21 @@ def test_build_deck_assembly_error(mocker):
     )
     assert result["status"] == "error"
     assert "host not allowed" in result["message"]
+
+
+def test_build_deck_qa_failure_attaches_report(mocker):
+    """DeckQaError subclasses ValueError: the wrong arm order silently drops qa_report."""
+    report = QaReport(
+        checks=[QaCheckResult(name="leftover_tokens", passed=False, message="[TITLE]")]
+    )
+    mock_generator = MagicMock()
+    mock_generator.build.side_effect = DeckQaError(report.summary(), report=report)
+    mocker.patch("server._get_generator", return_value=mock_generator)
+    result = build_deck(schema=_valid_schema())
+    assert result["status"] == "error"
+    assert "leftover_tokens" in result["message"]
+    assert result["qa_report"]["passed"] is False
+    assert result["qa_report"]["checks"][0]["name"] == "leftover_tokens"
 
 
 def test_filter_decks_by_tags_delegates_to_retriever(mocker):

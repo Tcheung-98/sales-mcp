@@ -3,7 +3,7 @@
 > **Living file.** Update when a ticket lands or the associate flow changes.  
 > **End-state SoT (do not fork):** [`END-SCOPE-SOT.md`](END-SCOPE-SOT.md)  
 > **Agents:** `.cursor/rules/pitch-deck-end-scope.mdc` is the always-on snapshot of this + the SoT.  
-> **Last updated:** 2026-08-25 (Prodie = relevant-product menu + checkboxes; deckgen = `build_deck`)
+> **Last updated:** 2026-09-08 (headless deck QA is an MVP gate; `build_deck` wiring in progress)
 
 ---
 
@@ -15,7 +15,7 @@ Associates pick products from a **Prodie menu**, then deckgen builds a FortuneAI
 Form (Discovery) ± SalesGPT conversation
   → Prodie proposes relevant products (Logic Guide V1 + GTM + inventory)
   → Associate checkboxes (price + timelines)                    ← I3; gate
-  → pass locked spec → build_deck (C1 spine + A5 clones + C2 fills)
+  → pass locked spec → build_deck (C1 spine + A5 clones + C2 fills + QA gate)
 ```
 
 **Prodie selects relevant products and shows them.** It does not build the deck.  
@@ -46,7 +46,7 @@ C2 tests stub I3: pass `confirmed_products` as if the associate already chose.
 
 ---
 
-## Progress (2026-08-25)
+## Progress (2026-09-08)
 
 | ID | Ticket | Status | Notes |
 |---|---|---|---|
@@ -59,7 +59,13 @@ C2 tests stub I3: pass `confirmed_products` as if the associate already chose.
 | I3 | PI-2761 | MCP lock done | Prodie checkbox UI still PI-2350 |
 | C2 | PI-2757 | **Done** | Deterministic + bounded AI fills in `build()` |
 | Wire | PI-2350 | **MVP remaining** | Prodie form + relevant list + checkboxes + pass spec to `build_deck` |
-| Stylist | PI-2754 | Shelved | Not MVP |
+| QA rail | PI-2754 (rescoped) | **In progress** | Headless Cursor QA is now an MVP gate, not a shelved stylist — [`docs/DECK-QA-ARCHITECTURE.md`](../../docs/DECK-QA-ARCHITECTURE.md) |
+
+**QA rail (B2–B4)** — B2 review package, B3 deterministic checks, the `deck-qa` skill, the
+BambooHR golden and the B4 headless runner have landed; `build_deck` wiring behind
+`DECK_QA_ENABLED` is in progress. Off by default: unset the flag and `build()` behaves as it
+did before the rail. B3 failures and an explicit B4 failure return `status: error` with
+`qa_report`; a QA timeout ships the deck with `qa.timed_out` plus a warning.
 
 **Creation rail** after C2: engineer can `build_deck` with a stubbed mix and get a seller-readable PPTX. Live Claude + manual FortuneAI PPTX review recommended before prod deploy.
 

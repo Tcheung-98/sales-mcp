@@ -1,4 +1,7 @@
 import io
+import time
+from contextlib import contextmanager
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import anthropic
@@ -7,9 +10,12 @@ from docx import Document
 from pptx import Presentation
 from pptx.util import Inches
 
+from ingestion.deck_qa import DeckQaError, QaCheckResult, QaReport
+from ingestion.deck_qa_agent import CursorQaReport, QaIssue
 from ingestion.generator import DeckGenerator
 from ingestion.gtm_product_map import GtmProductMap, ProductSlideRef
 from ingestion.pptx_tools import apply_replacements
+from ingestion.review_package import build_review_package
 from ingestion.schema import DeckSchema, Product
 from tests.fortuneai_placeholder_fixture import (
     MINIMAL_PNG,
@@ -852,3 +858,235 @@ def test_build_leaves_product_clone_title_untouched():
     ]
     assert "CEO DAILY" in titles
     assert result["slide_count"] == 10
+
+
+# --- Headless QA gate (docs/DECK-QA-ARCHITECTURE.md §8) ---
+
+QA_FIX_MARKER = "QA FIXED THIS SLIDE"
+
+
+@contextmanager
+def _qa_build_env(generator, *, agent, deterministic=None):
+    """Run a build with the real B2 minus its LibreOffice render, and B3/B4 faked.
+
+    B2 stays real because it renumbers slide parts before saving draft.pptx: a
+    stand-in that saves first and renumbers after caches stale rel targets in
+    python-pptx and corrupts the delivered deck (§8's renumber-before-save rule).
+    """
+    det = deterministic or QaReport(checks=[QaCheckResult(name="stub", passed=True)])
+    packages = []
+
+    def _packaged(*args, **kwargs):
+        packages.append(build_review_package(*args, **kwargs))
+        return packages[-1]
+
+    with (
+        patch("requests.get") as mock_get,
+        patch.object(generator, "_load_pptx", return_value=_presentation_with_n_slides(1)),
+        _patch_build_ai(),
+        patch("ingestion.review_package.render_slides", return_value=[]),
+        patch("ingestion.generator.build_review_package", side_effect=_packaged),
+        patch("ingestion.generator.run_deterministic_qa", return_value=det),
+        patch(
+            "ingestion.generator.run_headless_cursor_qa", side_effect=agent
+        ) as mock_agent,
+    ):
+        mock_get.return_value.content = fortuneai_fixture_bytes()
+        mock_get.return_value.raise_for_status = MagicMock()
+        yield SimpleNamespace(agent=mock_agent, packages=packages)
+
+
+def _qa_build(generator, **overrides):
+    schema = _build_schema()
+    return generator.build(
+        schema,
+        _FORTUNEAI_URL,
+        product_map=_product_map_for(*schema.confirmed_products),
+        audience_data=sample_audience_data(),
+        logo_bytes=MINIMAL_PNG,
+        **overrides,
+    )
+
+
+def _uploaded_deck_bytes(generator) -> bytes:
+    """Body of the generated/ upload — the deck the associate actually receives."""
+    for call in generator._s3.put_object.call_args_list:
+        if call.kwargs["Key"].startswith("generated/"):
+            return call.kwargs["Body"]
+    raise AssertionError("no deck was uploaded to generated/")
+
+
+def _deck_texts(body: bytes) -> list[str]:
+    prs = Presentation(io.BytesIO(body))
+    return [
+        shape.text_frame.text
+        for slide in prs.slides
+        for shape in slide.shapes
+        if shape.has_text_frame
+    ]
+
+
+def _qa_generator() -> DeckGenerator:
+    generator = _build_generator()
+    generator._s3.put_object.return_value = {}
+    generator._s3.generate_presigned_url.return_value = "https://s3.example.com/deck.pptx"
+    return generator
+
+
+def _agent_passes_clean(package, **kwargs):
+    return CursorQaReport(passed=True, loop_count=0)
+
+
+def _agent_fixes_the_draft(package, **kwargs):
+    """B4 as it really behaves: edits draft.pptx on disk, reports the slot it fixed."""
+    prs = Presentation(str(package.draft_path))
+    box = prs.slides[0].shapes.add_textbox(Inches(1), Inches(1), Inches(4), Inches(1))
+    box.text_frame.text = QA_FIX_MARKER
+    prs.save(str(package.draft_path))
+    return CursorQaReport(passed=True, loop_count=1, fixes_applied=["opportunity_body"])
+
+
+@pytest.mark.parametrize("flag", [None, "false", "0", "off"])
+def test_build_skips_qa_rail_unless_flag_is_truthy(monkeypatch, flag):
+    """The flag is the rollback: anything but 1/true/yes leaves build() as it was."""
+    if flag is None:
+        monkeypatch.delenv("DECK_QA_ENABLED", raising=False)
+    else:
+        monkeypatch.setenv("DECK_QA_ENABLED", flag)
+    generator = _qa_generator()
+
+    with (
+        patch("ingestion.generator.build_review_package") as mock_package,
+        patch("ingestion.generator.run_headless_cursor_qa") as mock_agent,
+        patch("requests.get") as mock_get,
+        patch.object(generator, "_load_pptx", return_value=_presentation_with_n_slides(1)),
+        _patch_build_ai(),
+    ):
+        mock_get.return_value.content = fortuneai_fixture_bytes()
+        mock_get.return_value.raise_for_status = MagicMock()
+        result = _qa_build(generator)
+
+    mock_package.assert_not_called()
+    mock_agent.assert_not_called()
+    assert "qa" not in result
+    assert result["slide_count"] == 10
+    assert result["warnings"] == []
+    generator._s3.put_object.assert_called_once()
+
+
+def test_build_qa_enabled_uploads_review_package_and_returns_qa_block(monkeypatch):
+    monkeypatch.setenv("DECK_QA_ENABLED", "TRUE")
+    generator = _qa_generator()
+
+    with _qa_build_env(generator, agent=_agent_passes_clean) as env:
+        result = _qa_build(generator)
+
+    env.agent.assert_called_once()
+    prefix = result["qa"]["review_package_key"]
+    assert prefix.startswith("review-packages/") and prefix.endswith("/")
+    assert result["qa"] == {
+        "deterministic_passed": True,
+        "cursor_passed": True,
+        "timed_out": False,
+        "review_package_key": prefix,
+    }
+    assert result["slide_count"] == 10
+    assert result["warnings"] == []
+    keys = [c.kwargs["Key"] for c in generator._s3.put_object.call_args_list]
+    assert f"{prefix}draft.pptx" in keys
+    assert f"{prefix}manifest.json" in keys
+    assert not env.packages[0].root.exists()  # ephemeral: S3 keeps the copy
+
+
+def test_build_reloads_the_draft_b4_fixed_on_disk(monkeypatch):
+    """The fix B4 saved must reach the delivered deck, not just the package (§8)."""
+    monkeypatch.setenv("DECK_QA_ENABLED", "yes")
+    generator = _qa_generator()
+
+    with _qa_build_env(generator, agent=_agent_fixes_the_draft):
+        result = _qa_build(generator)
+
+    assert QA_FIX_MARKER in _deck_texts(_uploaded_deck_bytes(generator))
+    assert result["qa"]["cursor_passed"] is True
+    assert result["slide_count"] == 10
+
+
+def test_build_keeps_in_memory_deck_when_b4_changed_nothing(monkeypatch):
+    monkeypatch.setenv("DECK_QA_ENABLED", "1")
+    generator = _qa_generator()
+
+    with _qa_build_env(generator, agent=_agent_passes_clean):
+        _qa_build(generator)
+
+    assert QA_FIX_MARKER not in _deck_texts(_uploaded_deck_bytes(generator))
+
+
+def test_build_raises_deck_qa_error_when_b4_fails(monkeypatch):
+    monkeypatch.setenv("DECK_QA_ENABLED", "1")
+    generator = _qa_generator()
+    failed = CursorQaReport(
+        passed=False, issues=[QaIssue(3, "error", "Opportunity body overflows")]
+    )
+
+    with _qa_build_env(generator, agent=lambda p, **kw: failed):
+        with pytest.raises(DeckQaError) as excinfo:
+            _qa_build(generator)
+
+    assert excinfo.value.report is failed
+    assert not any(
+        c.kwargs["Key"].startswith("generated/")
+        for c in generator._s3.put_object.call_args_list
+    )
+
+
+def test_build_raises_deck_qa_error_when_b3_fails(monkeypatch):
+    monkeypatch.setenv("DECK_QA_ENABLED", "1")
+    generator = _qa_generator()
+    det = QaReport(
+        checks=[QaCheckResult(name="leftover_tokens", passed=False, message="[TITLE]")]
+    )
+
+    with _qa_build_env(
+        generator, agent=_agent_passes_clean, deterministic=det
+    ) as env:
+        with pytest.raises(DeckQaError, match="leftover_tokens"):
+            _qa_build(generator)
+
+    env.agent.assert_not_called()
+
+
+def test_build_ships_the_deck_when_qa_runs_out_of_budget(monkeypatch):
+    """A timeout is infrastructure, not a quality verdict: warn and deliver (§8)."""
+    monkeypatch.setenv("DECK_QA_ENABLED", "1")
+    monkeypatch.setenv("DECK_QA_TIMEOUT_S", "0.2")
+    generator = _qa_generator()
+
+    def _agent_burns_its_budget(package, *, timeout_s, **kwargs):
+        time.sleep(timeout_s)
+        return CursorQaReport(
+            passed=False, issues=[QaIssue(None, "error", "B4 timed out")]
+        )
+
+    with _qa_build_env(generator, agent=_agent_burns_its_budget) as env:
+        result = _qa_build(generator)
+
+    env.agent.assert_called_once()
+    assert result["qa"]["timed_out"] is True
+    assert result["qa"]["cursor_passed"] is False
+    assert result["slide_count"] == 10
+    assert len(result["warnings"]) == 1
+    assert "did not finish within" in result["warnings"][0]
+    _uploaded_deck_bytes(generator)  # the deck still shipped
+
+
+def test_build_skips_b4_when_b2_and_b3_spend_the_budget(monkeypatch):
+    monkeypatch.setenv("DECK_QA_ENABLED", "1")
+    monkeypatch.setenv("DECK_QA_TIMEOUT_S", "0")
+    generator = _qa_generator()
+
+    with _qa_build_env(generator, agent=_agent_passes_clean) as env:
+        result = _qa_build(generator)
+
+    env.agent.assert_not_called()
+    assert result["qa"]["timed_out"] is True
+    assert result["qa"]["cursor_passed"] is False
