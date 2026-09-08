@@ -53,6 +53,27 @@ def test_manifest_validation_errors_on_missing_fields():
     assert any("slide_count" in e or "slides" in e or "template_key" in e for e in errors)
 
 
+def test_editable_defaults_from_role():
+    m = validate_manifest(_valid_manifest())
+    assert m.slides[0].editable is True
+    assert m.slides[1].editable is False
+
+
+def test_editable_can_be_set_explicitly():
+    data = _valid_manifest()
+    data["slides"][0]["editable"] = False
+    assert validate_manifest(data).slides[0].editable is False
+
+
+def test_slide_kind_discriminates_other_roles():
+    data = _valid_manifest()
+    data["slides"][0] = {"slide_index": 0, "role": "other", "slide_kind": "divider"}
+    m = validate_manifest(data)
+    assert m.slides[0].slide_kind == "divider"
+    assert m.slides[0].editable is True
+    assert m.slides[1].slide_kind is None
+
+
 def test_manifest_rejects_bad_role():
     data = _valid_manifest()
     data["slides"][0]["role"] = "stylist"
