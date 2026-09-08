@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import io
 from dataclasses import dataclass, field
+from typing import TYPE_CHECKING
 
 from pptx import Presentation
 
@@ -48,6 +49,9 @@ from ingestion.pptx_tools import (
     iter_shapes,
 )
 from ingestion.schema import DeckSchema
+
+if TYPE_CHECKING:
+    from ingestion.deck_qa_agent import CursorQaReport
 
 # First pitch slide (§5 index map); the last two slides are investment + thanks.
 PITCH_START_INDEX = 6
@@ -125,10 +129,12 @@ class DeckQaError(ValueError):
     """QA gate failure carrying its report (§8 failure semantics).
 
     Subclasses ValueError so server.py's existing ``except ValueError`` arm keeps
-    returning ``status: error`` until it learns to attach ``qa_report``.
+    returning ``status: error`` until it learns to attach ``qa_report``. B4 fails
+    with a ``CursorQaReport``, which carries the same ``passed`` / ``summary()`` /
+    ``to_json()`` surface, so either report travels here unconverted.
     """
 
-    def __init__(self, message: str, *, report: QaReport) -> None:
+    def __init__(self, message: str, *, report: QaReport | CursorQaReport) -> None:
         super().__init__(message)
         self.report = report
 

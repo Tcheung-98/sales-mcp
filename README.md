@@ -43,6 +43,9 @@ cp .env.example .env
 | `PRODUCT_DECKS_PREFIX` | S3 prefix for Hunter product decks referenced by Deck Path (default: `product-decks/`) |
 | `FORTUNEAI_TEMPLATE_KEY` | S3 key for Creation spine (default: `templates/FortuneAI_DeckTemplate.pptx`) |
 | `TEMPLATE_URL_ALLOWED_HOSTS` | Optional extra hosts for `build_deck` template URLs (comma-separated) |
+| `DECK_QA_ENABLED` | Run the headless deck QA gate in `build_deck` (`1`/`true`/`yes`; default off) |
+| `DECK_QA_TIMEOUT_S` | Wall-clock budget for the QA rail (default: `600`) |
+| `CURSOR_API_KEY` | Cursor SDK key — required when `DECK_QA_ENABLED` is on |
 
 ---
 
@@ -192,8 +195,16 @@ Premium Video → Print → Branded Content); product pages under each divider a
 Product Tags clones (`Deck Path` + `Slide #`). **C2** (`apply_placeholders` after assembly):
 fills date/logo/history/audience metrics/program types/investment/thanks, bounded Claude for
 named narrative slots, drops unused audience/program variant pages. Events / Conference products
-fail loud (GTM escalate). Missing or ambiguous map rows fail loud (no Titan substitute). No
-stylist (PI-2754 shelved).
+fail loud (GTM escalate). Missing or ambiguous map rows fail loud (no Titan substitute).
+
+**Headless deck QA gate (B2–B4)** — with `DECK_QA_ENABLED` set, `build_deck` runs the post-C2
+deck through a review package (draft + slide PNGs + manifest), deterministic checks, and a
+headless Cursor vision pass with at most **one** fix loop; product clones are flag-only. A
+deterministic failure or an explicit QA failure returns `status: error` with `qa_report`. QA
+that overruns `DECK_QA_TIMEOUT_S` (default 600s) does not block delivery — the deck ships with
+`qa.timed_out: true` and a warning. Review packages land under the ephemeral
+`review-packages/{uuid}/` S3 prefix (expire them with a 7–30 day lifecycle rule). Unset the
+flag and none of this runs. Contract: [`docs/DECK-QA-ARCHITECTURE.md`](docs/DECK-QA-ARCHITECTURE.md).
 
 **Per-slide fill method (FortuneAI stock spine, pre-product insert):**
 

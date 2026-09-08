@@ -58,9 +58,10 @@ def plan_pitch_sequence(
 ) -> list[PitchItem]:
     """Funded dividers + A5 clones in Workflow pitch order.
 
-    Mirrors ``DeckGenerator._group_products_by_divider`` plus the ordering loop in
-    ``assemble_skeleton``. Pure: no S3, no template load. Raises ValueError with
-    every placement failure at once (missing GTM row, Events escalation).
+    Drives the ordering loop in ``DeckGenerator.assemble_skeleton``, which calls
+    this rather than keeping a second copy. Pure: no S3, no template load. Raises
+    ValueError with every placement failure at once (missing GTM row, Events
+    escalation).
     """
     groups: list[list[ProductSlideRef]] = [[] for _ in CATEGORY_DIVIDERS]
     failures: list[str] = []
