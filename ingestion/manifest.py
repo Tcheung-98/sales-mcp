@@ -1,16 +1,15 @@
-"""Review-package manifest stub for the Deck QA rail (B2+).
+"""Review-package manifest for the deck QA rail (docs/DECK-QA-ARCHITECTURE.md §5).
 
-``assemble_skeleton`` currently returns a bare ``Presentation``; product-clone
-provenance for manifests is planned on ``origin/fix/fortuneai-deck-assembly`` /
-``feat/deck-qa-*`` branches. B2 will write draft.pptx + PNGs + a full
-``ReviewManifest`` alongside this schema.
+``assemble_skeleton`` returns a bare ``Presentation``; ``ingestion.review_package``
+derives product-clone provenance from ``plan_pitch_sequence`` and writes
+draft.pptx + PNGs + this manifest alongside the serialized DeckSchema.
 """
 
 from __future__ import annotations
 
-from typing import Literal
+from typing import Any, Literal
 
-from pydantic import BaseModel, Field, ValidationError
+from pydantic import BaseModel, Field, ValidationError, model_validator
 
 MANIFEST_SCHEMA_VERSION: Literal["1"] = "1"
 
@@ -18,11 +17,26 @@ MANIFEST_SCHEMA_VERSION: Literal["1"] = "1"
 class SlideManifestEntry(BaseModel):
     slide_index: int = Field(ge=0, description="0-based index in the draft PPTX")
     role: Literal["cover", "narrative", "product", "other"]
+    slide_kind: str | None = Field(
+        default=None,
+        description="Discriminator inside role=other: divider / investment / thank_you",
+    )
+    editable: bool = Field(
+        default=True,
+        description="False on A5 product clones — QA may flag them but never edit them",
+    )
     product_name: str | None = None
     source_path: str | None = None
     source_slide_number: int | None = Field(
         default=None, ge=1, description="1-based corpus slide when role=product"
     )
+
+    @model_validator(mode="before")
+    @classmethod
+    def default_editable_from_role(cls, data: Any) -> Any:
+        if isinstance(data, dict) and "editable" not in data:
+            return {**data, "editable": data.get("role") != "product"}
+        return data
 
 
 class ReviewManifest(BaseModel):
