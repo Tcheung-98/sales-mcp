@@ -6,6 +6,8 @@ from datetime import date
 from unittest.mock import MagicMock, patch
 
 import pytest
+from pptx.dml.color import RGBColor
+from pptx.util import Pt
 
 from ingestion.placeholder_fills import (
     EM_DASH,
@@ -208,6 +210,58 @@ def test_apply_investment_two_categories_divider_order():
     assert f"Display {EM_DASH} $20,000" in blob
     assert f"Print Mag {EM_DASH} $10,000" in blob
     assert "[PRODUCT CATEGORY]" not in blob
+
+
+def test_apply_investment_extra_product_lines_keep_template_formatting():
+    """A category with more products than pre-authored lines keeps its styling.
+
+    The extra lines used to come from a bare ``add_paragraph()``, which renders
+    as unbulleted default body text next to the styled first line. Only a
+    rendered-pixel check caught it, so assert the run properties here.
+    """
+    prs = build_fortuneai_fixture_prs()
+    schema = _schema(
+        budgets=[{"amount": 60_000}],
+        targeting_details="Chief Executive Officer, C-suite",
+        confirmed_products=[
+            Product(
+                name="Crown Unit", cadence="quarterly", price=25_000,
+                category="Digital Media",
+            ),
+            Product(
+                name="Scroller Unit", cadence="quarterly", price=25_000,
+                category="Digital Media",
+            ),
+            Product(
+                name="LinkedIn BrandLink", cadence="quarterly", price=10_000,
+                category="Digital Media",
+            ),
+        ],
+    )
+    _apply(prs, schema, ai=mock_placeholder_ai())
+
+    investment = prs.slides[-2]
+    box = next(
+        shape
+        for shape in investment.shapes
+        if getattr(shape, "has_text_frame", False)
+        and "High-Impact Media" in shape.text_frame.text
+    )
+    product_paras = [
+        para
+        for para in box.text_frame.paragraphs
+        if EM_DASH in (para.text or "")
+    ]
+    assert len(product_paras) == 3
+
+    for para in product_paras:
+        run = para.runs[0]
+        assert run.font.bold is True, f"{para.text!r} lost bold"
+        assert run.font.size == Pt(12), f"{para.text!r} lost font size"
+        assert run.font.color.rgb == RGBColor(0x00, 0xA8, 0xE1), (
+            f"{para.text!r} lost colour"
+        )
+        assert para.level == 1, f"{para.text!r} lost indent level"
 
 
 def test_apply_budget_mismatch_raises():

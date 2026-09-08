@@ -11,8 +11,9 @@ import io
 from unittest.mock import MagicMock
 
 from pptx import Presentation
+from pptx.dml.color import RGBColor
 from pptx.enum.shapes import PP_PLACEHOLDER
-from pptx.util import Inches
+from pptx.util import Inches, Pt
 
 from ingestion.audience_data import AudienceData, AudienceRow
 from ingestion.pptx_tools import APOS, CLIENT_NAME_POSSESSIVE_TOKEN, CLIENT_NAME_TOKEN, LOGO_TOKEN
@@ -160,7 +161,19 @@ def build_fortuneai_fixture_prs() -> Presentation:
     cat = inv.shapes.add_textbox(Inches(0.5), Inches(1.0), Inches(8), Inches(1.6))
     cat.text_frame.paragraphs[0].add_run().text = "[PRODUCT CATEGORY]"
     price_para = cat.text_frame.add_paragraph()
-    price_para.add_run().text = "[PRODUCT + PRODUCT PRICE] "
+    price_run = price_para.add_run()
+    price_run.text = "[PRODUCT + PRODUCT PRICE] "
+    # Styled like the real template's product line, so tests can prove that a
+    # category with more products than pre-authored lines keeps this formatting.
+    price_para.level = 1
+    price_run.font.bold = True
+    price_run.font.size = Pt(12)
+    price_run.font.color.rgb = RGBColor(0x00, 0xA8, 0xE1)
+    # FortuneAI_DeckTemplate follows the styled line with empty spacer
+    # paragraphs that carry no runs. Extra products land in these, so the
+    # fixture has to reproduce them or it cannot catch lost formatting.
+    for level in (0, 1, 0):
+        cat.text_frame.add_paragraph().level = level
 
     _intro_or_thanks(prs, thanks=True)
     return prs

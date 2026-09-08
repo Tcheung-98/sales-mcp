@@ -9,11 +9,13 @@ from __future__ import annotations
 
 import logging
 import re
+from copy import deepcopy
 from datetime import date
 from typing import TYPE_CHECKING
 from urllib.parse import urlparse
 
 import requests
+from pptx.text.text import _Paragraph
 
 from ingestion.audience_data import AudienceData, AudienceRow, rank_segments_by_index
 from ingestion.category_dividers import CATEGORY_DIVIDERS, divider_index_for_category
@@ -363,22 +365,47 @@ def _set_paragraph_text(para, text: str) -> None:
         para.text = text
 
 
+def _clone_styled_paragraph(tf, model_p, *, replacing=None):
+    """Copy ``model_p`` into ``tf``, carrying its bullet, indent and run styling.
+
+    Replaces ``replacing`` in place when given, otherwise appends. Needed
+    because neither an empty template spacer nor ``tf.add_paragraph()`` carries
+    any run formatting, so writing a product line into either renders it as
+    unstyled body text beside the styled first line.
+    """
+    new_p = deepcopy(model_p)
+    if replacing is not None:
+        replacing.getparent().replace(replacing, new_p)
+    else:
+        tf._txBody.append(new_p)
+    return _Paragraph(new_p, tf)
+
+
 def _fill_category_box(shape, category: str, products: list[Product]) -> None:
     lines = [f"{product.name} {EM_DASH} {format_usd(product.price)}" for product in products]
     tf = shape.text_frame
     paras = list(tf.paragraphs)
     if not paras:
         raise ValueError("Investment category box has no paragraphs")
+    # FortuneAI authors one styled product line then empty spacer paragraphs, so
+    # a category with several products has to clone that line rather than write
+    # into a spacer. Snapshot it before the first product overwrites it.
+    model_p = deepcopy(paras[1]._p) if len(paras) > 1 else None
     _set_paragraph_text(paras[0], category)
     for i, line in enumerate(lines):
         idx = i + 1
-        if idx < len(paras):
-            _set_paragraph_text(paras[idx], line)
-        else:
+        if model_p is None:
             para = tf.add_paragraph()
             para.text = line
+        elif idx < len(paras) and paras[idx].runs:
+            _set_paragraph_text(paras[idx], line)
+        elif idx < len(paras):
+            para = _clone_styled_paragraph(tf, model_p, replacing=paras[idx]._p)
+            _set_paragraph_text(para, line)
+        else:
+            _set_paragraph_text(_clone_styled_paragraph(tf, model_p), line)
     leftover_start = 1 + len(lines)
-    # Re-read; add_paragraph may have grown the list.
+    # Re-read; the clones above may have replaced or grown the list.
     paras = list(tf.paragraphs)
     for para in paras[leftover_start:]:
         _set_paragraph_text(para, "")
