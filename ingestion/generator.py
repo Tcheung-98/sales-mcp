@@ -779,21 +779,17 @@ class DeckGenerator:
             self._delete_slide(prs, idx)
 
         insert_at = len(prs.slides) - 2  # before investment + thank you
-        pitch_slides: list[tuple[str, object]] = []
-        for i in range(FORTUNEAI_DIVIDER_COUNT):
+        # Insert last funded section first so Workflow order 13→17 lands at insert_at.
+        for i in reversed(range(FORTUNEAI_DIVIDER_COUNT)):
             refs = groups[i]
             if not refs:
                 continue
-            pitch_slides.append(("divider", i))
-            for ref in refs:
-                pitch_slides.append(("product", ref))
-
-        for kind, payload in reversed(pitch_slides):
-            if kind == "divider":
-                src_idx = FORTUNEAI_DIVIDER_SLIDE_INDEX[payload]
-                self._clone_slide(divider_src_prs, src_idx, prs)
-            else:
-                self._clone_product_ref(payload, prs)
+            for ref in reversed(refs):
+                self._clone_product_ref(ref, prs)
+                self._insert_slide_at(prs, insert_at)
+            self._clone_slide(
+                divider_src_prs, FORTUNEAI_DIVIDER_SLIDE_INDEX[i], prs
+            )
             self._insert_slide_at(prs, insert_at)
 
         sync_sections(prs)
