@@ -309,6 +309,13 @@ Runner: `scripts/run_deck_qa.py` (invokes Cursor SDK — **not** an MCP tool exp
 }
 ```
 
+**Field semantics** (added while authoring the skill; the shape above did not pin these, and each one changes whether a deck ships):
+
+- `severity` — `info` | `warning` | `error`.
+- `passed` — `false` only when an `error` lands on an `editable: true` slide. Issues on `editable: false` product clones are **flag-only** per the §4 role table: report them at `warning` at most. B4 is forbidden from fixing them, so failing the deck on one blocks delivery on something no one in the pass can repair — that is a GTM data escalation, not a QA gate failure.
+- `loop_count` — `0` when B4 reviewed and changed nothing, `1` when it ran the fix pass. Never higher (Hard Rule 7). Re-rendering and re-viewing PNGs to verify a fix is part of the same loop.
+- `fixes_applied` — slot ids from §7 step 4, or a short stable label for a deterministic token fix. Must be non-empty **iff** `draft.pptx` changed on disk; §8's re-load keys off it.
+
 ### Outputs
 
 - Updated `draft.pptx` (or `final.pptx`)
@@ -521,4 +528,5 @@ Two other stale statements to clean up while nearby (either PR is fine, just not
 | Date | Change |
 |------|--------|
 | 2026-09-08 | Initial architecture — headless Cursor QA required for MVP |
+| 2026-09-08 | PR-C: §7 `qa_cursor.json` field semantics pinned (`severity` enum, `passed` rule for flag-only product-clone issues, `loop_count`, `fixes_applied` iff-changed) — the shape alone left the exit contract ambiguous for the skill |
 | 2026-09-08 | Verified against the checkout and corrected before subagent deploy: base branch is `fix/fortuneai-deck-assembly` (PR #31), not `main`; §5 post-C2 index map rewritten (was `1–11 narrative`, actually `1–5`, which would have marked A5 clones editable); §5 provenance sourcing and `PI-2522` prerequisite documented; §6 leftover-token list completed from source constants; §4/§7 fix method changed from `apply_replacements` to `replace_token`; §8 in-memory-vs-on-disk reload bug, `DeckQaError` failure semantics, runner import path, and sync-call timeout risk called out; §12 golden products flagged as unverified; §13 matrix gaps closed |
