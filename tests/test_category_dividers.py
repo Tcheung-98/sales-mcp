@@ -4,9 +4,23 @@ import pytest
 
 from ingestion.category_dividers import (
     CATEGORY_DIVIDERS,
+    FORTUNEAI_DIVIDER_SLIDE_INDEX,
     divider_index_for_category,
     is_fortuneai_template_url,
 )
+
+
+def test_divider_slide_index_matches_template_layout():
+    """Physical divider positions in FortuneAI_DeckTemplate (not sequential 12–16)."""
+    names = [CATEGORY_DIVIDERS[i].name for i in range(len(FORTUNEAI_DIVIDER_SLIDE_INDEX))]
+    assert names == [
+        "High-Impact Media",
+        "Editorial Alignment",
+        "Premium Video",
+        "Print",
+        "Branded Content",
+    ]
+    assert FORTUNEAI_DIVIDER_SLIDE_INDEX == (15, 13, 14, 16, 12)
 
 
 def test_divider_order_matches_workflow():

@@ -40,14 +40,17 @@ _INTRO_RULES = """\
 INTRO TITLE:
 - 3–6 words.
 - ALL CAPS.
-- Client-facing deck title; do not mention RFP mechanics.
+- Name the initiative or business outcome from the campaign goal, narrative, and RFP.
+- Do NOT use the client's company name.
+- Do not mention RFP mechanics or internal process.
 """
 
 _HEADER_RULES = """\
 OPPORTUNITY HEADER:
 - 3–6 words.
 - Sentence case or title case (not ALL CAPS).
-- Industry tension or ambition for this client.
+- One short, declarative claim naming the shift or outcome the client is chasing.
+- Do not describe what the company does — name the opportunity or tension.
 """
 
 _OPPORTUNITY_BODY_RULES = """\
@@ -63,7 +66,8 @@ _AUDIENCE_TITLE_RULES = """\
 AUDIENCE TITLE:
 - 3–6 words.
 - Sentence case (not ALL CAPS).
-- Summarize the target audience theme for this client.
+- Name what this audience has in common in plain business language.
+- Do NOT list job titles or acronyms.
 """
 
 _PROGRAM_BLURB_RULES = """\
@@ -139,19 +143,34 @@ def validate_program_blurb(text: str) -> None:
 
 def _brief_context(schema: DeckSchema) -> str:
     products = ", ".join(
-        f"{p.name} ({p.category}, {p.cadence})" for p in schema.confirmed_products
+        f"{p.name} ({p.category}, {p.cadence}, ${p.price:,.0f})"
+        for p in schema.confirmed_products
+    )
+    budgets = ", ".join(
+        f"{(tier.label or 'tier')}: ${tier.amount:,.0f}" for tier in schema.budgets
     )
     kpis = ", ".join(schema.kpis)
-    return (
-        f"Company: {schema.company_name}\n"
-        f"Industry: {schema.industry}\n"
-        f"Campaign goal: {schema.campaign_goal}\n"
-        f"Campaign narrative: {schema.campaign_narrative}\n"
-        f"Targeting: {schema.targeting_details}\n"
-        f"KPIs: {kpis}\n"
-        f"KPI details: {schema.kpi_details}\n"
-        f"Confirmed products: {products}\n"
-    )
+    platforms = ", ".join(schema.preferred_platforms_products)
+    lines = [
+        f"Company: {schema.company_name}",
+        f"Industry: {schema.industry}",
+        f"Flight dates: {schema.flight_dates.start} to {schema.flight_dates.end}",
+        f"Budget tiers: {budgets}",
+        f"Campaign goal: {schema.campaign_goal}",
+        f"Campaign narrative: {schema.campaign_narrative}",
+        f"Targeting: {schema.targeting_details}",
+        f"KPIs: {kpis}",
+        f"KPI details: {schema.kpi_details}",
+        f"Preferred platforms/products: {platforms}",
+        f"Confirmed products: {products}",
+    ]
+    if schema.platform_or_product_specifics:
+        lines.append(
+            f"Platform or product specifics: {schema.platform_or_product_specifics}"
+        )
+    if schema.additional_rfp_details:
+        lines.append(f"RFP / additional request details: {schema.additional_rfp_details}")
+    return "\n".join(lines) + "\n"
 
 
 def _call_validated(
@@ -283,14 +302,25 @@ class PlaceholderAI:
         )
 
     def program_blurb(self, schema: DeckSchema, category_name: str) -> str:
+        from ingestion.placeholder_fills import funded_divider_buckets
+
+        funded_in_category = [
+            p.name
+            for divider_name, products in funded_divider_buckets(schema)
+            if divider_name == category_name
+            for p in products
+        ]
+        funded_line = ", ".join(funded_in_category) if funded_in_category else "none"
         system = (
             f"You write Fortune pitch deck program one-liners.\n\n"
             f"{_SHARED_RULES}\n\n{_PROGRAM_BLURB_RULES}"
         )
         user = (
             f"{_brief_context(schema)}\n"
-            f"Product category on this program box: {category_name}\n"
-            "Write one Product description. blurb (10–15 words)."
+            f"Product category divider: {category_name}\n"
+            f"Funded products in this category: {funded_line}\n"
+            "Write one Product description. blurb (10–15 words) naming what "
+            "these placements deliver for this client."
         )
         return _call_validated(
             self._caller,
