@@ -72,6 +72,20 @@ def _resolve_selected_product(
     """Resolve one exact GTM selection to authoritative Creation fields."""
     try:
         row = gtm.products.lookup(selected.name, selected.category)
+    except ValueError as exc:
+        raise ConfirmMixError(str(exc)) from exc
+
+    if not row.deck_path or row.slide_number is None:
+        # build_deck's GtmProductMap drops rows without a usable Deck Path /
+        # Slide # at parse time, so confirming this product would lock a mix
+        # that Creation cannot build. Fail loud at lock time instead.
+        raise ConfirmMixError(
+            f"Product {row.product_name!r} in category {row.category!r} has a "
+            "missing or invalid Deck Path/Slide # in GTM Product Tags — "
+            "build_deck cannot clone it; fix the GTM row before confirming"
+        )
+
+    try:
         pricing = inventory.pricing.lookup(row.product_name)
         amount = inventory.pricing.primary_amount(row.product_name)
     except ValueError as exc:

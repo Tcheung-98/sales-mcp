@@ -152,10 +152,19 @@ class GtmProductCatalog:
     """In-memory index of Product Tags rows for Ideation (GTM TAGS candidate pool)."""
 
     def __init__(self, rows: list[GtmProductCandidate]) -> None:
-        self._rows = list(rows)
+        # Deduplicate rows that point at the same Deck Path / Slide # for the
+        # same product+category (duplicate tag rows in the live workbook).
+        # GtmProductMap.lookup (build_deck) already dedupes this way; without
+        # the same collapse here, confirm_mix would reject a selection as
+        # "ambiguous" that build_deck resolves fine.
+        unique: dict[tuple[str, str, str, int | None], GtmProductCandidate] = {}
+        for row in rows:
+            key = (row.product_name, row.category, row.deck_path, row.slide_number)
+            unique[key] = row
+        self._rows = list(unique.values())
         self._by_name: dict[str, list[GtmProductCandidate]] = {}
         self._by_category: dict[str, list[GtmProductCandidate]] = {}
-        for row in rows:
+        for row in self._rows:
             self._by_name.setdefault(row.product_name, []).append(row)
             self._by_category.setdefault(row.category, []).append(row)
 

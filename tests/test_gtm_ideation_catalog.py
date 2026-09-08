@@ -153,6 +153,26 @@ def test_ambiguous_without_category(product_catalog: GtmProductCatalog):
         product_catalog.lookup("Term Sheet")
 
 
+def test_duplicate_rows_collapse_like_gtm_product_map():
+    """Duplicate tag rows (same name/category/Deck Path/Slide #) must not make
+    confirm_mix reject a selection that build_deck's GtmProductMap resolves."""
+    dupe = (
+        "Branded Content",
+        "Digital Spotlights",
+        "branded content, thought leadership",
+        "Fortune_Branded_Content_2026.pptx",
+        "7",
+    )
+    catalog = GtmProductCatalog.from_xlsx_bytes(_product_xlsx([dupe, dupe]))
+    ref = catalog.lookup("Digital Spotlights", "Branded Content")
+    assert ref.slide_number == 7
+    assert len(catalog.products_in_category("Branded Content")) == 1
+    # Without a category the lookup must also resolve, not raise "Ambiguous".
+    assert catalog.lookup("Digital Spotlights").deck_path.endswith(
+        "Branded_Content_2026.pptx"
+    )
+
+
 def test_empty_gtm_tags_row_skipped():
     data = _product_xlsx(
         [

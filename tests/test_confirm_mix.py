@@ -99,6 +99,33 @@ def test_ambiguous_name_requires_category(catalogs):
     assert "multiple categories" in result["message"]
 
 
+def test_row_without_usable_slide_number_fails_loud():
+    """A GTM row whose Slide # cannot be parsed (e.g. '6, 7') is dropped by
+    build_deck's GtmProductMap, so confirm_mix must reject it at lock time
+    instead of locking a mix Creation cannot build."""
+    from tests.logic_guide_fixtures import REPRESENTATIVE_GTM_ROWS
+
+    bad_row = (
+        "Newsletters",
+        "Fortune 500 Digest",
+        "fortune 500, enterprise",
+        "Fortune_Newsletters_2026.pptx",
+        "6, 7",
+    )
+    data = build_workbook_bytes(gtm_rows=[*REPRESENTATIVE_GTM_ROWS, bad_row])
+    gtm = GtmIdeationCatalog.from_xlsx_bytes(data)
+    inventory = InventoryWorkbook.from_xlsx_bytes(data)
+
+    result = confirm_mix_from_dict(
+        _payload({"name": "Fortune 500 Digest", "category": "Newsletters"}),
+        gtm=gtm,
+        inventory=inventory,
+    )
+
+    assert result["status"] == "error"
+    assert "Deck Path/Slide #" in result["message"]
+
+
 def test_unknown_product_fails_loud(catalogs):
     gtm, inventory = catalogs
 
