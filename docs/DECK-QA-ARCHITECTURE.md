@@ -329,6 +329,8 @@ warnings = apply_placeholders(prs, schema, audience=..., logo_bytes=..., ai=ai)
 
 qa_block = None
 if _deck_qa_enabled():
+    # build_review_package renumbers slide parts before saving draft.pptx and
+    # mutates prs in the process — see "three things" note 2 below.
     package = build_review_package(prs, schema, plan=plan)   # kwarg name: `plan`, see §5
     det_report = run_deterministic_qa(prs, schema, package.manifest)
     package.write_deterministic_report(det_report)
@@ -353,7 +355,11 @@ self._renumber_slide_parts(prs)
 
 **1. Reload the deck after B4.** B4 writes fixes into `draft.pptx` inside the package directory. `build()` holds a separate in-memory `Presentation`, saves *that*, and uploads it. Without the re-load, QA runs, reports `passed: true`, applies fixes — and ships the unfixed deck. Either re-open `package.draft_path` as shown, or make the runner hand back PPTX bytes; pick one and state it in the PR description.
 
-**2. Renumbering happens after packaging.** `_renumber_slide_parts(prs)` runs *after* the package is built, so `draft.pptx` and the uploaded `final.pptx` are not byte-identical even when QA changes nothing. The "product slide unchanged after QA" item in the prompts-doc verification checklist must therefore compare *rendered PNGs*, not file hashes.
+**2. `draft.pptx` must be renumbered before it is saved.** A5 clones arrive carrying their source partnames, so saving an assembled deck without `rename_slide_parts` emits two zip entries under one `ppt/slides/slideNN.xml` (plus its `.rels`). Verified on the five-product mix by disabling the renumber: `UserWarning: Duplicate name: 'ppt/slides/slide19.xml'`. A three-clone toy case does **not** reproduce it — you need multiple dividers cloned from a second template copy alongside products from distinct source decks.
+
+The pseudocode above renumbers only at the end, which would hand B3 and B4 a malformed draft. `build_review_package` therefore renumbers before serializing, which also mutates the caller's `Presentation` and makes `build()`'s later `_renumber_slide_parts` a harmless no-op. Keep both calls: packaging must not assume it is running inside `build()`.
+
+Because packaging renumbers, `draft.pptx` and `final.pptx` *are* byte-identical when QA changes nothing. The "product slide unchanged after QA" item in the prompts-doc verification checklist should still compare *rendered PNGs* rather than hashes, but for the real reason: a B4 fix on any editable slide rewrites shared package parts, so a whole-file hash tells you nothing about whether a specific product slide moved.
 
 **3. Failure semantics.** `server.py::build_deck` catches `ValueError` and returns `{"status": "error", "message": str(exc)}`, so a bare `raise ValueError` loses the report and contradicts Hard Rule 7 ("second failure → `status: error` with `qa_report`"). Define `DeckQaError(ValueError)` carrying `.report`, and widen the `server.py` handler to attach `qa_report` when present:
 
@@ -521,4 +527,5 @@ Two other stale statements to clean up while nearby (either PR is fine, just not
 | Date | Change |
 |------|--------|
 | 2026-09-08 | Initial architecture — headless Cursor QA required for MVP |
+| 2026-09-08 | Wave 1 landed (PI-2522 B2, B3, deck-qa skill, BambooHR golden). §8 corrected: `draft.pptx` must be renumbered before saving or A5 clones emit duplicate `ppt/slides/slideNN.xml` zip entries; the prior "never byte-identical" rationale was wrong |
 | 2026-09-08 | Verified against the checkout and corrected before subagent deploy: base branch is `fix/fortuneai-deck-assembly` (PR #31), not `main`; §5 post-C2 index map rewritten (was `1–11 narrative`, actually `1–5`, which would have marked A5 clones editable); §5 provenance sourcing and `PI-2522` prerequisite documented; §6 leftover-token list completed from source constants; §4/§7 fix method changed from `apply_replacements` to `replace_token`; §8 in-memory-vs-on-disk reload bug, `DeckQaError` failure semantics, runner import path, and sync-call timeout risk called out; §12 golden products flagged as unverified; §13 matrix gaps closed |
