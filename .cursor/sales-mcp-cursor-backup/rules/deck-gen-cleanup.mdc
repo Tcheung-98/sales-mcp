@@ -1,0 +1,13 @@
+---
+description: Deck-gen cleanup sequencing — merge A5 first, Titan/RAG vestiges in a follow-up PR
+alwaysApply: true
+---
+
+# Deck generation cleanup sequencing
+
+When working on schema-driven deck gen / Creation MVP, remember (full checklist in `local/schema-driven-deck-generation-engine/CLEANUP-TODO.md`):
+
+- **A5 (PI-2541)** only changes product-page **lookup** (GTM Deck Path / Slide #). Merge it without deleting Titan.
+- **Next cleanup PR after A5 merges:** remove vestigial Titan / embedding weight — `SlideEmbedder`, snapshot cosine `SlideRetriever`, ingest `embed_slides` / `write_embeddings`, MCP `search_decks` (and research tools if unused), related tests/README RAG framing.
+- **No dedicated Titan provision** in this repo to tear down first. Optional later: Bedrock IAM on runtime keys, unused S3 `snapshots/*/embeddings*`.
+- Confirm upstream callers still need research search tools before deleting them; gate instead of delete if unsure.

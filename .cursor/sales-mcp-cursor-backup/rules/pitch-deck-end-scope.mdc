@@ -1,0 +1,43 @@
+---
+description: Shared SoT for Pitch Deck Workflow (locked DeckSchema → sales-mcp build_deck)
+alwaysApply: true
+---
+
+# Pitch Deck end-scope SoT
+
+Canonical: `local/schema-driven-deck-generation-engine/END-SCOPE-SOT.md` (sales-mcp) or `local/pitch-deck-mvp/` (IsItInProd copy).  
+Historical Prodie ideation spec (not runtime contract): `docs/PRODIE-IDEATION-SPEC.md`.  
+Living goal/progress: `PROGRESS.md`.
+
+Product specs: Pitch Deck Workflow + Fortune Logic Guide V1. Assets: `FortuneAI_DeckTemplate.pptx`, `Fortune_AITool_GTM_Database`, Inventory Calendar.
+
+## End state (MVP)
+
+Upstream (**Pitch Deck Builder**, **Sales HQ**, or any caller) sends a **complete `DeckSchema` payload** — Discovery fields + `confirmed_products[]` (`name`, `category`, `price`, `cadence`) → **sales-mcp `build_deck`** (validate + C1 FortuneAI assembly + exact Deck Path/Slide # clones + C2 fills [+ optional QA rail]) → PPTX.
+
+**sales-mcp is deck generation only.** It does not ideate, propose a menu, or choose products.  
+**The caller owns product lock upstream.** Humans vet **product names**, not Hunter slide numbers. After lock, A5 maps name/category → clone.
+
+**Prodie is not the ideation brain on this MCP.** If Prodie appears at all, it is a transport/client forwarding an already-locked payload — not proposing or checkboxing products here.
+
+**`confirm_mix` is optional legacy** — validates name+category and hydrates prices from GTM when the caller omits full products. Not the primary associate path.
+
+Guide Media Mix auto-fund is **not** required MVP.
+
+## Not end state
+
+Titan/RAG product matching · MCP `LogicGuideEngine` as associate runtime · Prodie ideating/proposing through this MCP · Cursor stylist MVP (PI-2754) · `Category_Presentation_*` spine · AI rewriting product slides · `propose_mix` MCP tool.
+
+## Progress (2026-09-09)
+
+- Done: A1–A3, C3 schema, A5 exact map, C1 FortuneAI assembly, C2 placeholders, I1 data, optional I3 `confirm_mix`
+- Remaining out-of-repo: Pitch Deck Builder UI / upstream product lock (PI-2350)
+
+## Hard rules
+
+1. Missing GTM row / inventory hold / price mismatch → fail loud; never silent substitute.
+2. Conference Sponsorship → GTM escalate; do not invent conference slides.
+3. C2 fills named FortuneAI slots only; never rewrite A5 product clones.
+4. Merge A5 before Titan cleanup; don’t delete RAG in the C2 PR.
+5. Primary path: `build_deck(full DeckSchema)` — never search Hunter decks for substitute product slides.
+6. Do not default-check sold/held inventory lines (upstream responsibility).
