@@ -386,6 +386,7 @@ Return shape addition (backward compatible):
   "qa": {
     "deterministic_passed": true,
     "cursor_passed": true,
+    "timed_out": false,
     "review_package_key": "review-packages/{uuid}/"
   }
 }
@@ -401,17 +402,23 @@ On failure the `qa` block is not returned (the call raises); the report travels 
 | `DECK_QA_TIMEOUT_S` | `600` | Wall-clock budget for B2+B3+B4 combined |
 | `CURSOR_API_KEY` | — | Required when `DECK_QA_ENABLED` is truthy |
 
-### ⚠️ Open decision: `build_deck` becomes a long, synchronous call
+### Resolved: `build_deck` stays synchronous and fails soft on timeout
 
 `build_deck` is an MCP tool that Prodie calls and blocks on. Today it is one LibreOffice-free assembly plus a handful of Claude calls. With the rail on, a single call additionally does: a LibreOffice PPTX→PDF conversion, ~16 `pdftoppm` rasterizations, and a headless Cursor agent session with up to 16 attached images and a fix loop. That is plausibly **several minutes**, against MCP clients that commonly time out well before that.
 
-This is not resolved by this document. Before PR-F, pick one:
+**Decision (2026-09-08): option (a) — ship synchronous, fail soft on timeout.** Considered and rejected: **(b)** fail closed on timeout, which makes a slow runner indistinguishable from a bad deck and blocks the associate; **(c)** split into `build_deck` → `{"status": "qa_pending", "review_id": ...}` plus a second poll tool, which is the architecturally correct answer but changes the Prodie contract and therefore pulls PI-2350 into this track.
 
-- **(a) Ship synchronous**, set `DECK_QA_TIMEOUT_S` conservatively, and on timeout fall back to returning the un-QA'd deck with `qa.cursor_passed: false` plus a warning. Cheapest; weakest gate.
-- **(b) Ship synchronous and fail closed** on timeout. Strongest gate; worst associate experience if the runner is slow.
-- **(c) Split the tool**: `build_deck` returns `{"status": "qa_pending", "review_id": ...}` immediately and a second tool (or a poll on the same tool) returns the final URL. Correct, but it changes the Prodie contract and therefore touches PI-2350.
+Option (a) is the only one that keeps `DECK_QA_ENABLED=false` and `=true` on the same call signature, which is what lets the flag be a true no-op rollback.
 
-**Status: deferred to Wave 3 (decided 2026-09-08).** Wave 1 and Wave 2 are unaffected — B2, B3, the skill, the golden test, and the standalone runner are all indifferent to how `build_deck` schedules the rail. Do not let a Wave 1 agent pick an answer here. Revisit before PR-F opens; if nothing is decided by then, PR-F implements **(a)**, because it is the only option that keeps `DECK_QA_ENABLED=false` and `=true` on the same call signature.
+**What PR-F must implement:**
+
+1. B2 + B3 + B4 run inside `build()` under a single `DECK_QA_TIMEOUT_S` budget (default `600`).
+2. **On timeout, do not raise.** Upload the deck as it stands and return normally with `qa.cursor_passed: false`, `qa.timed_out: true`, and a human-readable entry appended to the existing `warnings[]` list. Associates already read `warnings[]`, so the degradation is visible without a new field they'd have to learn.
+3. **A timeout is not a QA failure.** `DeckQaError` is for B3 failing or B4 returning `passed: false` — genuine quality verdicts that must fail loud per Hard Rule 5. A timeout is an infrastructure symptom and must not be laundered into either a pass or a quality failure.
+4. **B3 failures still raise**, regardless of the timeout budget. B3 is fast, deterministic, and has no legitimate reason to time out; a deterministic failure means the deck is actually wrong.
+5. Log timeouts at `WARNING` with the `review_id`, so the rate of soft-failures is measurable. If it is not near zero in practice, revisit **(c)** — a gate that times out often is not a gate.
+
+This weakens the guarantee: under sustained timeouts a deck can ship un-QA'd. That is accepted for MVP because the alternative blocks delivery on runner latency, and because the review package is still written to S3 for after-the-fact inspection.
 
 ---
 
@@ -527,5 +534,6 @@ Two other stale statements to clean up while nearby (either PR is fine, just not
 | Date | Change |
 |------|--------|
 | 2026-09-08 | Initial architecture — headless Cursor QA required for MVP |
+| 2026-09-08 | §8 open decision resolved: `build_deck` stays synchronous and **fails soft** on timeout (`qa.timed_out`, warning appended, deck still delivered). A timeout is infrastructure, not a quality verdict — B3 failures and B4 `passed: false` still raise `DeckQaError` |
 | 2026-09-08 | Wave 1 landed (PI-2522 B2, B3, deck-qa skill, BambooHR golden). §8 corrected: `draft.pptx` must be renumbered before saving or A5 clones emit duplicate `ppt/slides/slideNN.xml` zip entries; the prior "never byte-identical" rationale was wrong |
 | 2026-09-08 | Verified against the checkout and corrected before subagent deploy: base branch is `fix/fortuneai-deck-assembly` (PR #31), not `main`; §5 post-C2 index map rewritten (was `1–11 narrative`, actually `1–5`, which would have marked A5 clones editable); §5 provenance sourcing and `PI-2522` prerequisite documented; §6 leftover-token list completed from source constants; §4/§7 fix method changed from `apply_replacements` to `replace_token`; §8 in-memory-vs-on-disk reload bug, `DeckQaError` failure semantics, runner import path, and sync-call timeout risk called out; §12 golden products flagged as unverified; §13 matrix gaps closed |
