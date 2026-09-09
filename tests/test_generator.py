@@ -15,6 +15,7 @@ from ingestion.deck_qa_agent import CursorQaReport, QaIssue
 from ingestion.generator import DECK_QA_BYPASSED_WARNING, DeckGenerator
 from ingestion.gtm_product_map import GtmProductMap, ProductSlideRef
 from ingestion.pptx_tools import apply_replacements
+from ingestion.render_slides import RenderSlidesError
 from ingestion.review_package import build_review_package
 from ingestion.schema import DeckSchema, Product
 from tests.fortuneai_placeholder_fixture import (
@@ -1100,6 +1101,34 @@ def test_build_fails_loud_when_b4_burns_its_budget(qa_on, monkeypatch):
     keys = [c.kwargs["Key"] for c in generator._s3.put_object.call_args_list]
     assert not any(k.startswith("generated/") for k in keys)  # nothing shipped
     assert any(k.startswith("review-packages/") for k in keys)  # inspectable
+
+
+def test_build_wraps_render_failure_in_deck_qa_error(qa_on):
+    """A LibreOffice/poppler failure in B2 must fail structured, not crash raw.
+
+    RenderSlidesError is a RuntimeError; unwrapped it escapes server.py's
+    DeckQaError/ValueError handlers and the caller gets an unstructured crash
+    instead of status: error with qa_report.
+    """
+    generator = _qa_generator()
+
+    with (
+        patch("requests.get") as mock_get,
+        patch.object(generator, "_load_pptx", return_value=_presentation_with_n_slides(1)),
+        _patch_build_ai(),
+        patch(
+            "ingestion.review_package.render_slides",
+            side_effect=RenderSlidesError("LibreOffice not found (soffice/libreoffice)"),
+        ),
+    ):
+        mock_get.return_value.content = fortuneai_fixture_bytes()
+        mock_get.return_value.raise_for_status = MagicMock()
+        with pytest.raises(DeckQaError, match="could not render slides") as excinfo:
+            _qa_build(generator)
+
+    assert not excinfo.value.report.passed
+    keys = [c.kwargs["Key"] for c in generator._s3.put_object.call_args_list]
+    assert not any(k.startswith("generated/") for k in keys)  # nothing shipped
 
 
 def test_build_fails_loud_when_b2_and_b3_spend_the_budget(qa_on, monkeypatch):

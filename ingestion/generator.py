@@ -52,6 +52,7 @@ from ingestion.pptx_tools import (
     set_ph_text,
     sync_sections,
 )
+from ingestion.render_slides import RenderSlidesError
 from ingestion.review_package import (
     ReviewPackage,
     build_review_package,
@@ -857,9 +858,29 @@ class DeckGenerator:
 
         # Packaging renumbers slide parts before saving draft.pptx, so B3/B4 get a
         # well-formed deck and build()'s own _renumber_slide_parts is a no-op (§8).
-        package = build_review_package(
-            prs, schema, plan=plan_pitch_sequence(schema, gtm_map)
-        )
+        try:
+            package = build_review_package(
+                prs, schema, plan=plan_pitch_sequence(schema, gtm_map)
+            )
+        except RenderSlidesError as exc:
+            # LibreOffice/poppler failure is infrastructure, but the gate did not
+            # complete, so nothing ships (§8). RenderSlidesError is a RuntimeError;
+            # unwrapped it would escape server.py's handlers as an unstructured crash.
+            report = CursorQaReport(
+                passed=False,
+                issues=[
+                    QaIssue(
+                        None,
+                        "error",
+                        f"review package could not be built (slide render): {exc}",
+                    )
+                ],
+            )
+            raise DeckQaError(
+                f"Deck QA could not render slides for review (review {review_id}): "
+                f"{exc}",
+                report=report,
+            ) from exc
         try:
             det_report = run_deterministic_qa(prs, schema, package.manifest)
             package.write_deterministic_report(det_report)
