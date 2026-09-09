@@ -1,13 +1,15 @@
 # sales-mcp
 
-Internal Python MCP server that powers Prodie's pitch deck **Creation** for Fortune sales associates.
-Associates fill a Discovery form (optionally informed by a SalesGPT conversation). **Prodie** proposes
-relevant, priced, available products; the associate confirms via checkboxes. This server then
-generates a Fortune-branded PPTX (FortuneAI spine + exact Hunter product-slide clones).
-It does **not** choose the mix. Prodie does **not** assemble the PPTX.
+Internal Python MCP server for Fortune pitch deck **Creation** (deck generation only).
+
+The upstream caller — **Pitch Deck Builder**, **Sales HQ**, or any MCP client — sends a **complete
+`DeckSchema` payload**: Discovery fields plus `confirmed_products[]` (each with `name`, `category`,
+`price`, `cadence`). This server validates that payload, assembles the FortuneAI spine and exact
+GTM product clones (C1), fills stock placeholders (C2), optionally runs the deck QA rail, and
+uploads a PPTX. It does **not** ideate, propose a product menu, or choose the mix.
 
 End-scope SoT (sales-mcp checkout): `local/schema-driven-deck-generation-engine/END-SCOPE-SOT.md`.  
-**Prodie Ideation spec:** [`docs/PRODIE-IDEATION-SPEC.md`](docs/PRODIE-IDEATION-SPEC.md) — Prodie menu + select; this server `build_deck`.
+Historical Prodie ideation design (not the runtime contract): [`docs/PRODIE-IDEATION-SPEC.md`](docs/PRODIE-IDEATION-SPEC.md).
 
 ---
 
@@ -141,13 +143,13 @@ curl -s -X POST https://fortune-sales-mcp.tj3ek8xjdg9br.us-east-1.cs.amazonlight
 programmatically. Visual quality (typography, shapes, imagery) is preserved from the source.
 Client-specific text is replaced post-clone via placeholder targeting.
 
-**Schema-driven generation** — deck generation requires a fully hydrated `DeckSchema`
-(Discovery intake + confirmed products). `DiscoverySchema` covers Workflow Discovery fields.
-`DeckSchema` extends it with non-empty `confirmed_products` for Creation. **Prodie** proposes the
-mix (Logic Guide V1 + GTM/inventory) and enforces sufficiency; this server validates independently
-via Pydantic and clones exact GTM `Deck Path` / `Slide #` pages into FortuneAI_DeckTemplate.
+**Schema-driven generation** — the primary path is `build_deck(full DeckSchema)`. The caller owns
+Discovery intake and product lock upstream; this server consumes a fully hydrated `DeckSchema`
+(Discovery fields + non-empty `confirmed_products`). `DiscoverySchema` covers Workflow Discovery
+fields; `DeckSchema` extends it for Creation. Pydantic validation runs here; product pages clone
+exact GTM `Deck Path` / `Slide #` into FortuneAI_DeckTemplate (A5 + C1).
 
-**Discovery ↔ Creation handoff (PI-2758)** — field map for Prodie / Sales HQ forms:
+**Discovery ↔ Creation handoff (PI-2758)** — field map for upstream forms (Pitch Deck Builder / Sales HQ):
 
 | Workflow / form field | Schema field | Required |
 | --- | --- | --- |
@@ -164,25 +166,20 @@ via Pydantic and clones exact GTM `Deck Path` / `Slide #` pages into FortuneAI_D
 | Additional RFP details | `additional_rfp_details` | yes |
 | Client logo | `client_logo` (URL or SharePoint path) | yes |
 | Platform/product specifics | `platform_or_product_specifics` | no |
-| Confirmed mix (Ideation out) | `confirmed_products` | Creation only |
+| Confirmed mix (locked upstream) | `confirmed_products` | Creation only — each entry needs `name`, `category`, `price`, `cadence` |
 
 Industry enum (Workflow): Technology, Professional Services, Healthcare, Financial Services,
 Energy, Lifestyle, Luxury. Legacy `Tech` normalizes to `Technology`. Legacy
 `budget_quarterly` still shims to a single budget tier. Escalation uses the max tier amount
 (≥ $750k → GTM).
 
-**Propose + select (MVP) vs this server** — Prodie shows a relevant-product menu (Logic Guide V1 +
-GTM + inventory). Associates lock via checkboxes; then pass the spec to `build_deck`
-(`confirm_mix` validates names/prices/availability first).
-There is **no `propose_mix` MCP tool**. The in-repo Logic Guide modules remain isolated
-reference/test code and are not part of the associate runtime.
-
-**Creation lock (I3 / PI-2761)** — `confirm_mix(discovery, selected_products)` accepts the
-associate's complete checkbox list as `[{name, category?}, ...]`. It does not accept prices,
-tiers, swaps, scores, or ranking instructions. The server resolves exact GTM identity plus
-authoritative price/cadence and flight availability, then returns `deck_schema` with
-`confirmed_products` for `build_deck`. Conference / Lists platforms return
-`status: escalation` (do not build). Unavailable products cannot be confirmed in MVP.
+**Primary path vs legacy helpers** — call `build_deck(deck_schema)` with the locked payload.
+There is **no `propose_mix` MCP tool**. `ingestion/logic_guide/` (`LogicGuideEngine`) is
+reference/test code only, not associate runtime. **`confirm_mix`** (I3 / PI-2761) is optional
+legacy: when the caller sends only `[{name, category?}, ...]`, it validates GTM identity,
+hydrates authoritative price/cadence from inventory, checks flight availability, and returns
+`deck_schema` for `build_deck`. Prefer sending the full `confirmed_products[]` directly.
+Conference / Lists platforms return `status: escalation` (do not build).
 
 **FortuneAI assembly + C2 fills (C1 / PI-2756 + C2 / PI-2757)** — `build_deck(schema, template_url?)`
 validates the handoff and assembles from **FortuneAI_DeckTemplate** (not industry
@@ -222,7 +219,7 @@ stylist (PI-2754 shelved).
 
 Product Tags lookup and Audience Data load are separate passes over the same xlsx.
 
-**Ideation data sources (I1 / PI-2759)** — Prodie reads GTM DB +
+**GTM + inventory data (I1 / PI-2759)** — `build_deck` and optional `confirm_mix` read GTM DB +
 inventory calendar + pricing from S3 snapshots (SharePoint is human SoT). Access path, sheet
 contract, sync/ownership, and env defaults: [`local/schema-driven-deck-generation-engine/I1-DATA-SOURCES.md`](local/schema-driven-deck-generation-engine/I1-DATA-SOURCES.md).
 Canonical keys: `ingestion/ideation_data_keys.py`. **Chunk B:** `ingestion/gtm_ideation_catalog.py`
@@ -244,8 +241,8 @@ Known Product Tags coverage gaps (flag for GTM; do not invent substitutes):
 - Duplicate Branded Content rows (same name/path/slide, different GTM TAGS) — deduped as one
 - `Term Sheet` / `Next To Lead` appear in both Newsletters and Vodcasts — category required
 
-**Titan / RAG (legacy)** — `search_decks`, `filter_decks_by_tags`, and corpus embeddings remain
-for research and ingest. They are **not** the associate Creation path (exact GTM map only).
+**Titan / RAG (legacy research)** — `search_decks`, `filter_decks_by_tags`, and corpus embeddings
+remain for research and ingest. They are **not** the Creation path (exact GTM map only).
 
 ---
 
@@ -253,9 +250,9 @@ for research and ingest. They are **not** the associate Creation path (exact GTM
 
 | Tool | Purpose |
 |---|---|
-| `build_deck` | FortuneAI assembly + C2 fills → presigned PPTX URL |
-| `confirm_mix` | Validate locked product list → `deck_schema` for `build_deck` |
-| `search_decks` | Semantic slide search (research; not associate picker) |
+| `build_deck` | Primary Creation path: validate `DeckSchema`, C1 assemble + C2 fills → presigned PPTX URL |
+| `confirm_mix` | Optional legacy: validate name+category list, hydrate prices → `deck_schema` for `build_deck` |
+| `search_decks` | Semantic slide search (legacy research; not Creation) |
 | `filter_decks_by_tags` | Tag filter on corpus metadata |
 | `get_slide_content` | Fetch slide text for a deck id |
 

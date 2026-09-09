@@ -13,7 +13,7 @@ from pydantic import (
 )
 from pydantic_core import PydanticCustomError
 
-# Cadence and category are validated against fixed lists to catch Prodie typos at handoff.
+# Cadence and category are validated against fixed lists to catch upstream typos at handoff.
 # Update these if Fortune adds new cadences or product categories to the rate card.
 _VALID_CADENCES = {"annual", "quarterly", "monthly", "weekly"}
 # Product mix categories (Creation). Vodcasts funds Premium Video divider (C1).

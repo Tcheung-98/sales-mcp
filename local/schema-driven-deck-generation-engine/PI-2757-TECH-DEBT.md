@@ -22,6 +22,6 @@
 | SharePoint / Graph logo fetch | C2 uses HTTPS `client_logo` only; SharePoint library paths fail loud. |
 | C1 divider order vs live PPTX | Live slides 13–17 order may not match Workflow captions; C1 follow-up, not C2. |
 | Live Claude end-to-end | Run `tests/smoke_build_live.py` without `--mock-ai` and open the PPTX before prod deploy. |
-| Prodie rewire | PI-2350 — seller-facing `build_deck` wiring separate from this ticket. |
+| Prodie rewire | PI-2350 — upstream Pitch Deck Builder sends locked DeckSchema to `build_deck` (out of repo). |
 
 Do not spend a cycle rewriting fill logic until a live-template probe disagrees. Fail-loud is correct.

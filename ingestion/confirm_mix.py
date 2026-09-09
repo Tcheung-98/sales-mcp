@@ -1,9 +1,12 @@
-"""Validate a Prodie-selected product list and lock it for Creation.
+"""Optional legacy: validate a caller-supplied product list and hydrate ``DeckSchema``.
 
-This module does not propose, rank, fund, swap, or otherwise choose products.
-Prodie sends the associate's final checkbox selection; sales-mcp resolves each
-exact GTM product against authoritative pricing and inventory, then emits the
-``DeckSchema`` consumed by ``build_deck``.
+Primary Creation path: upstream sends a complete ``DeckSchema`` (including
+``confirmed_products`` with prices) directly to ``build_deck``.
+
+This helper is for callers that send only ``[{name, category?}, ...]``. It does
+not propose, rank, fund, swap, or otherwise choose products — it resolves each
+exact GTM product against authoritative pricing and inventory, then emits a
+``DeckSchema`` for ``build_deck``.
 """
 
 from __future__ import annotations
@@ -35,14 +38,14 @@ class ConfirmMixError(ValueError):
 
 
 class SelectedProduct(BaseModel):
-    """One product checked by the associate in Prodie."""
+    """One product name (+ optional category) from the caller's locked list."""
 
     name: str
     category: str | None = None
 
 
 class ConfirmMixRequest(BaseModel):
-    """Creation lock supplied directly by Prodie after checkbox confirmation."""
+    """Discovery + product names for optional ``confirm_mix`` hydration."""
 
     discovery: DiscoverySchema
     selected_products: list[SelectedProduct] = Field(min_length=1)
@@ -107,7 +110,7 @@ def confirm_mix(
     gtm: GtmIdeationCatalog,
     inventory: InventoryWorkbook,
 ) -> tuple[DeckSchema, list[str]]:
-    """Validate Prodie's final checkbox selection and lock it for Creation."""
+    """Hydrate a caller's product list into a ``DeckSchema`` for ``build_deck``."""
     escalations = sorted(
         set(request.discovery.preferred_platforms_products) & _ESCALATION_PLATFORMS
     )
