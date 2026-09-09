@@ -201,14 +201,25 @@ def run_headless_cursor_qa(
     report_path.unlink(missing_ok=True)
     before = _digest(package.draft_path)
 
-    status, timed_out = _run_agent_session(
-        prompt,
-        images,
-        cwd=root,
-        model=model,
-        api_key=key,
-        timeout_s=budget,
-    )
+    try:
+        status, timed_out = _run_agent_session(
+            prompt,
+            images,
+            cwd=root,
+            model=model,
+            api_key=key,
+            timeout_s=budget,
+        )
+    except Exception as exc:
+        logger.exception("B4 agent session failed")
+        report = CursorQaReport(
+            passed=False,
+            issues=[
+                QaIssue(None, "error", f"B4 agent session failed: {exc}"),
+            ],
+        )
+        package.write_cursor_report(report)
+        return report
 
     report = _read_agent_report(report_path, package.manifest)
     if timed_out:

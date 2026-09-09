@@ -259,6 +259,24 @@ class DeckGenerator:
         )
 
     @staticmethod
+    def _existing_layout_ids(target_prs: PresentationType) -> list[int]:
+        """All ``sldLayoutId/@id`` values already in the package (must be unique)."""
+        ids: list[int] = []
+        for master in target_prs.slide_masters:
+            layout_id_lst = master._element.find(qn("p:sldLayoutIdLst"))
+            if layout_id_lst is None:
+                continue
+            for layout_id_el in layout_id_lst.findall(qn("p:sldLayoutId")):
+                raw = layout_id_el.get("id")
+                if raw is None:
+                    continue
+                try:
+                    ids.append(int(raw))
+                except ValueError:
+                    pass
+        return ids
+
+    @staticmethod
     def _import_slide_layout(target_prs: PresentationType, source_layout):
         """Copy ``source_layout`` — plus its master and theme — into ``target_prs``.
 
@@ -321,10 +339,13 @@ class DeckGenerator:
             )
         for child in list(layout_id_lst):
             layout_id_lst.remove(child)
+        layout_ids = DeckGenerator._existing_layout_ids(target_prs)
+        new_layout_id = max(layout_ids, default=2147483648) + 1
         layout_id_lst.append(
             parse_xml(
                 f'<p:sldLayoutId xmlns:p="{_PML_NS}" xmlns:r="{_RELS_NS}" '
-                f'id="2147483649" r:id="{master_part.relate_to(layout_part, RT.SLIDE_LAYOUT)}"/>'
+                f'id="{new_layout_id}" '
+                f'r:id="{master_part.relate_to(layout_part, RT.SLIDE_LAYOUT)}"/>'
             )
         )
 
