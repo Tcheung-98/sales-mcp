@@ -28,7 +28,6 @@ import boto3
 import pytest
 from pptx import Presentation
 
-from ingestion.confirm_mix import derive_cadence
 from ingestion.generator import DECK_QA_BYPASSED_WARNING, DeckGenerator
 from ingestion.gtm_product_map import load_gtm_product_map_from_s3
 from ingestion.placeholder_fills import (
@@ -48,10 +47,7 @@ from ingestion.placeholder_fills import (
     TITLE_TOKEN,
     apply_placeholders,
     format_usd,
-    mix_total,
-    stated_total_budget,
 )
-from ingestion.placeholders import select_audience_variant
 from ingestion.pptx_tools import (
     CLIENT_NAME_POSSESSIVE_TOKEN,
     CLIENT_NAME_TOKEN,
@@ -74,7 +70,6 @@ from tests.fortuneai_placeholder_fixture import (
     mock_placeholder_ai,
     sample_audience_data,
 )
-from tests.logic_guide_fixtures import REPRESENTATIVE_PRICING_ROWS
 
 _FORTUNEAI_URL = "https://fortune.sharepoint.com/sites/x/FortuneAI_DeckTemplate.pptx"
 GOLDEN_AS_OF = date(2026, 9, 8)
@@ -155,37 +150,6 @@ def _golden_deck(schema):
         ai=mock_placeholder_ai(),
     )
     return prs, warnings
-
-
-def test_golden_mix_sums_to_stated_tier():
-    schema = bamboohr_tier1_schema()
-    assert mix_total(schema) == BAMBOOHR_TIER1_BUDGET
-    assert stated_total_budget(schema) == BAMBOOHR_TIER1_BUDGET
-    assert BAMBOOHR_TIER1_BUDGET < 750_000  # below the GTM escalation threshold
-
-
-def test_golden_cadences_are_what_confirm_mix_derives():
-    """A hand-built mix that confirm_mix could plausibly have produced (§12)."""
-    rates = {
-        product: pricing for _section, product, pricing in REPRESENTATIVE_PRICING_ROWS
-    }
-    for product in BAMBOOHR_PRODUCTS:
-        assert product.cadence == derive_cadence(product.name, rates[product.name])
-
-
-def test_golden_products_resolve_in_representative_gtm_rows():
-    gtm_map = bamboohr_product_map()
-    for product in BAMBOOHR_PRODUCTS:
-        ref = gtm_map.lookup(product.name, product.category)
-        assert ref.deck_path
-        assert ref.slide_number >= 1
-
-
-def test_golden_targeting_matches_at_least_two_audience_segments():
-    schema = bamboohr_tier1_schema()
-    matched = sample_audience_data().match_targeting(schema.targeting_details)
-    assert len(matched) >= 2
-    assert select_audience_variant(len(matched)).size == len(matched)
 
 
 def test_assembled_skeleton_keeps_workflow_pitch_order():

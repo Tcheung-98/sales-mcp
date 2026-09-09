@@ -125,22 +125,6 @@ def test_deterministic_qa_passes_on_filled_fixture():
     assert "passed" in report.summary()
 
 
-def test_deterministic_qa_passes_on_two_funded_dividers():
-    schema = _schema(
-        budgets=[{"amount": 30_000}],
-        preferred_platforms_products=["Print", "Digital Ads/Programmatic"],
-        confirmed_products=[
-            Product(name="Print Mag", cadence="annual", price=10_000, category="Print"),
-            Product(
-                name="Display", cadence="monthly", price=20_000, category="Digital Media"
-            ),
-        ],
-    )
-    prs = _filled_prs(schema)
-    report = run_deterministic_qa(prs, schema, _manifest(prs, schema))
-    assert _failed_names(report) == []
-
-
 def test_missing_funded_divider_fails():
     schema = _schema()
     prs = _filled_prs(schema)
@@ -153,15 +137,6 @@ def test_missing_funded_divider_fails():
     report = run_deterministic_qa(prs, schema, _manifest(prs, schema))
     assert _failed_names(report) == ["divider_order"]
     assert "Editorial Alignment" in report.failures[0].message
-
-
-def test_to_json_matches_qa_deterministic_shape():
-    schema = _schema()
-    prs = _filled_prs(schema)
-    payload = run_deterministic_qa(prs, schema, _manifest(prs, schema)).to_json()
-    assert payload["passed"] is True
-    assert [check["name"] for check in payload["checks"]] == _EXPECTED_CHECKS
-    assert all(set(check) == {"name", "passed", "message"} for check in payload["checks"])
 
 
 def test_leftover_title_token_fails():

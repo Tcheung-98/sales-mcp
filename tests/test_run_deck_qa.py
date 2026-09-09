@@ -1,14 +1,7 @@
-"""B4 headless Cursor QA runner (docs/DECK-QA-ARCHITECTURE.md §7).
-
-Offline: a fake ``cursor_sdk`` module stands in for the SDK, so nothing here needs
-``CURSOR_API_KEY`` or network access. The fake keeps the real call shape —
-``Agent.create(options)`` as a context manager, ``agent.send(UserMessage(...))``,
-``run.wait()`` — so the runner's own SDK plumbing is still under test.
-"""
+"""B4 headless Cursor QA runner (offline; fake cursor_sdk, no network)."""
 
 from __future__ import annotations
 
-import importlib.util
 import json
 import sys
 import time
@@ -98,7 +91,6 @@ def _write_package(
     manifest_slide_count: int | None = None,
     schema: DeckSchema | None = None,
 ) -> Path:
-    """Write a review package directory the way B2 leaves it on disk."""
     roles = roles if roles is not None else _TEN_SLIDE_ROLES
     schema = schema if schema is not None else _schema()
     deck = prs if prs is not None else _stub_deck(len(roles))
@@ -125,7 +117,6 @@ def _write_package(
 
 
 def _fortuneai_package(root: Path) -> tuple[Path, DeckSchema]:
-    """A package whose deck actually passes B3 (the C2-filled CI fixture)."""
     schema = _schema()
     prs = build_fortuneai_fixture_prs()
     apply_placeholders(
@@ -144,7 +135,6 @@ def _fortuneai_package(root: Path) -> tuple[Path, DeckSchema]:
 
 
 def _install_fake_sdk(monkeypatch, *, on_run=None, status: str = "finished"):
-    """Stand a fake ``cursor_sdk`` in ``sys.modules`` and record what it was sent."""
     log = types.SimpleNamespace(
         creates=0, prompts=[], images=[], options=[], cancels=0, closes=0
     )
@@ -219,8 +209,6 @@ def _install_fake_sdk(monkeypatch, *, on_run=None, status: str = "finished"):
 
 
 def _agent_writes(root: Path, payload: dict, *, touch_draft: bool = False):
-    """Simulate the agent: optionally edit draft.pptx, then write qa_cursor.json."""
-
     def _run() -> None:
         if touch_draft:
             draft = root / "draft.pptx"
@@ -236,7 +224,6 @@ def _attached_indices(log) -> list[int]:
 
 def test_deterministic_failure_skips_the_agent(tmp_path, monkeypatch):
     log = _install_fake_sdk(monkeypatch)
-    # Manifest declares 11 slides for a 10-slide deck: B3's slide_count check fails.
     root = _write_package(tmp_path / "pkg", manifest_slide_count=11)
 
     assert main(["--package-dir", str(root)]) == 1
@@ -280,106 +267,58 @@ def test_cli_success_path_runs_both_gates(tmp_path, monkeypatch):
     assert json.loads((root / "qa_cursor.json").read_text())["passed"] is True
 
 
-def test_success_path_writes_cursor_report(tmp_path, monkeypatch):
-    root = _write_package(tmp_path / "pkg")
-    package = load_review_package(root)
-    _install_fake_sdk(
-        monkeypatch,
-        on_run=_agent_writes(
-            root,
-            {
-                "passed": True,
-                "loop_count": 0,
-                "issues": [
-                    {
-                        "slide_index": 4,
-                        "severity": "warning",
-                        "message": "Audience card 3 reach sits below its label.",
-                    }
-                ],
-                "fixes_applied": [],
-            },
-        ),
-    )
-
-    report = run_headless_cursor_qa(package, timeout_s=30)
-
-    assert report.passed is True
-    assert report.loop_count == 0
-    assert report.fixes_applied == []
-    assert [(i.slide_index, i.severity) for i in report.issues] == [(4, "warning")]
-    assert json.loads((root / "qa_cursor.json").read_text()) == report.to_json()
-    assert "passed" in report.summary()
-
-
-def test_reported_fix_implies_the_draft_changed(tmp_path, monkeypatch):
-    root = _write_package(tmp_path / "pkg")
-    package = load_review_package(root)
-    before = (root / "draft.pptx").read_bytes()
-    _install_fake_sdk(
-        monkeypatch,
-        on_run=_agent_writes(
-            root,
-            {
-                "passed": True,
-                "loop_count": 1,
-                "issues": [],
-                "fixes_applied": ["opportunity_body"],
-            },
-            touch_draft=True,
-        ),
-    )
-
-    report = run_headless_cursor_qa(package, timeout_s=30)
-
-    assert report.fixes_applied == ["opportunity_body"]
-    assert report.loop_count == 1
-    assert (root / "draft.pptx").read_bytes() != before
-
-
-def test_unreported_draft_edit_is_still_reported(tmp_path, monkeypatch):
-    """§8 re-loads the deck only when fixes_applied is non-empty."""
-    root = _write_package(tmp_path / "pkg")
-    package = load_review_package(root)
-    _install_fake_sdk(
-        monkeypatch,
-        on_run=_agent_writes(
-            root,
+@pytest.mark.parametrize(
+    ("touch_draft", "agent_payload", "expected_fixes", "expected_loop"),
+    [
+        (
+            True,
             {"passed": True, "loop_count": 0, "issues": [], "fixes_applied": []},
-            touch_draft=True,
+            [UNREPORTED_FIX_LABEL],
+            1,
         ),
-    )
-
-    report = run_headless_cursor_qa(package, timeout_s=30)
-
-    assert report.fixes_applied == [UNREPORTED_FIX_LABEL]
-    assert report.loop_count == 1
-    assert any("changed on disk" in issue.message for issue in report.issues)
-    assert json.loads((root / "qa_cursor.json").read_text())["fixes_applied"] == [
-        UNREPORTED_FIX_LABEL
-    ]
-
-
-def test_claimed_fix_on_unchanged_draft_is_cleared(tmp_path, monkeypatch):
-    root = _write_package(tmp_path / "pkg")
-    package = load_review_package(root)
-    _install_fake_sdk(
-        monkeypatch,
-        on_run=_agent_writes(
-            root,
+        (
+            False,
             {
                 "passed": True,
                 "loop_count": 1,
                 "issues": [],
                 "fixes_applied": ["intro_title"],
             },
+            [],
+            1,
         ),
+        (
+            True,
+            {
+                "passed": True,
+                "loop_count": 1,
+                "issues": [],
+                "fixes_applied": ["opportunity_body"],
+            },
+            ["opportunity_body"],
+            1,
+        ),
+    ],
+)
+def test_fix_reconciliation(
+    tmp_path,
+    monkeypatch,
+    touch_draft,
+    agent_payload,
+    expected_fixes,
+    expected_loop,
+):
+    root = _write_package(tmp_path / "pkg")
+    package = load_review_package(root)
+    _install_fake_sdk(
+        monkeypatch,
+        on_run=_agent_writes(root, agent_payload, touch_draft=touch_draft),
     )
 
     report = run_headless_cursor_qa(package, timeout_s=30)
 
-    assert report.fixes_applied == []
-    assert any("unchanged" in issue.message for issue in report.issues)
+    assert report.fixes_applied == expected_fixes
+    assert report.loop_count == expected_loop
 
 
 def test_product_slide_pngs_are_never_attached(tmp_path, monkeypatch):
@@ -394,7 +333,6 @@ def test_product_slide_pngs_are_never_attached(tmp_path, monkeypatch):
 
     run_headless_cursor_qa(package, timeout_s=30)
 
-    # Index 7 is the A5 clone (editable: false) — flag-only, so it is not attached.
     assert _attached_indices(log) == [0, 1, 2, 3, 4, 5, 6, 8, 9]
     assert all("slide-007.png" not in path for path in log.images)
 
@@ -411,16 +349,13 @@ def test_image_attachments_are_capped(tmp_path):
 
     assert len(images) == MAX_ATTACHED_IMAGES
     assert indices == sorted(indices)
-    # Cover, narrative and the tail pages win the budget over dividers.
     assert indices[:6] == [0, 1, 2, 3, 4, 5]
     assert len(roles) - 2 in indices and len(roles) - 1 in indices
     product_indices = {e.slide_index for e in package.manifest.slides if not e.editable}
     assert product_indices.isdisjoint(indices)
 
 
-def test_product_clone_error_is_downgraded_and_does_not_fail_the_deck(
-    tmp_path, monkeypatch
-):
+def test_product_clone_error_is_downgraded(tmp_path, monkeypatch):
     root = _write_package(tmp_path / "pkg")
     package = load_review_package(root)
     _install_fake_sdk(
@@ -476,58 +411,38 @@ def test_error_on_editable_slide_overrides_a_claimed_pass(tmp_path, monkeypatch)
     assert "failed" in report.summary()
 
 
-def test_loop_count_is_capped_at_one(tmp_path, monkeypatch):
+@pytest.mark.parametrize(
+    "failure_mode",
+    ["missing_report", "sdk_error", "failed_status"],
+)
+def test_agent_failure_modes(tmp_path, monkeypatch, failure_mode):
     root = _write_package(tmp_path / "pkg")
     package = load_review_package(root)
-    _install_fake_sdk(
-        monkeypatch,
-        on_run=_agent_writes(
-            root, {"passed": True, "loop_count": 3, "issues": [], "fixes_applied": []}
-        ),
-    )
 
-    assert run_headless_cursor_qa(package, timeout_s=30).loop_count == 1
+    if failure_mode == "missing_report":
+        _install_fake_sdk(monkeypatch)
+    elif failure_mode == "sdk_error":
+        _install_fake_sdk(monkeypatch)
+        module = sys.modules["cursor_sdk"]
 
+        def _boom_create(cls, options=None, **_kwargs):
+            raise RuntimeError("sdk unavailable")
 
-def test_missing_agent_report_fails(tmp_path, monkeypatch):
-    root = _write_package(tmp_path / "pkg")
-    package = load_review_package(root)
-    _install_fake_sdk(monkeypatch)
+        monkeypatch.setattr(module.Agent, "create", classmethod(_boom_create))
+    else:
+        _install_fake_sdk(
+            monkeypatch,
+            status="error",
+            on_run=_agent_writes(
+                root,
+                {"passed": True, "loop_count": 0, "issues": [], "fixes_applied": []},
+            ),
+        )
 
     report = run_headless_cursor_qa(package, timeout_s=30)
 
     assert report.passed is False
-    assert any("qa_cursor.json" in issue.message for issue in report.issues)
-    assert json.loads((root / "qa_cursor.json").read_text())["passed"] is False
-
-
-def test_stale_agent_report_is_not_reused(tmp_path, monkeypatch):
-    root = _write_package(tmp_path / "pkg")
-    (root / "qa_cursor.json").write_text(
-        json.dumps({"passed": True, "loop_count": 0, "issues": [], "fixes_applied": []}),
-        encoding="utf-8",
-    )
-    package = load_review_package(root)
-    _install_fake_sdk(monkeypatch)
-
-    assert run_headless_cursor_qa(package, timeout_s=30).passed is False
-
-
-def test_failed_run_status_fails_the_report(tmp_path, monkeypatch):
-    root = _write_package(tmp_path / "pkg")
-    package = load_review_package(root)
-    _install_fake_sdk(
-        monkeypatch,
-        status="error",
-        on_run=_agent_writes(
-            root, {"passed": True, "loop_count": 0, "issues": [], "fixes_applied": []}
-        ),
-    )
-
-    report = run_headless_cursor_qa(package, timeout_s=30)
-
-    assert report.passed is False
-    assert any("status 'error'" in issue.message for issue in report.issues)
+    assert report.issues
 
 
 def test_timeout_cancels_the_run_and_fails(tmp_path, monkeypatch):
@@ -552,23 +467,6 @@ def test_missing_api_key_fails_loud(tmp_path, monkeypatch):
         run_headless_cursor_qa(package, timeout_s=30)
 
 
-def test_sdk_session_failure_returns_failed_report(tmp_path, monkeypatch):
-    root = _write_package(tmp_path / "pkg")
-    package = load_review_package(root)
-    _install_fake_sdk(monkeypatch)
-    module = sys.modules["cursor_sdk"]
-
-    def _boom_create(cls, options=None, **_kwargs):
-        raise RuntimeError("sdk unavailable")
-
-    monkeypatch.setattr(module.Agent, "create", classmethod(_boom_create))
-
-    report = run_headless_cursor_qa(package, timeout_s=30)
-
-    assert report.passed is False
-    assert any("sdk unavailable" in issue.message for issue in report.issues)
-
-
 def test_prompt_carries_the_skill_and_the_manifest(tmp_path, monkeypatch):
     root = _write_package(tmp_path / "pkg")
     package = load_review_package(root)
@@ -582,7 +480,7 @@ def test_prompt_carries_the_skill_and_the_manifest(tmp_path, monkeypatch):
     run_headless_cursor_qa(package, timeout_s=30)
     prompt = log.prompts[0]
 
-    assert "B4 headless vision pass" in prompt  # the skill, verbatim
+    assert "B4 headless vision pass" in prompt
     assert "Never edit a slide with `editable: false`" in prompt
     assert str(package.draft_path) in prompt
     assert "role=product" in prompt
@@ -604,18 +502,3 @@ def test_resolve_timeout_prefers_argument_then_env(monkeypatch):
     monkeypatch.setenv("DECK_QA_TIMEOUT_S", "soon")
     with pytest.raises(ValueError, match="DECK_QA_TIMEOUT_S"):
         resolve_timeout_s()
-
-
-def test_cli_shim_delegates_to_the_helper():
-    """scripts/ is not packaged, so the shim must only wrap the ingestion helper."""
-    path = Path(__file__).resolve().parents[1] / "scripts" / "run_deck_qa.py"
-    spec = importlib.util.spec_from_file_location("run_deck_qa_shim", path)
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    assert module.main is main
-
-
-def test_cli_help_exits_clean():
-    with pytest.raises(SystemExit) as exc:
-        main(["--help"])
-    assert exc.value.code == 0

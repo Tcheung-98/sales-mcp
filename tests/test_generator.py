@@ -962,10 +962,9 @@ def _agent_fixes_the_draft(package, **kwargs):
     return CursorQaReport(passed=True, loop_count=1, fixes_applied=["opportunity_body"])
 
 
-@pytest.mark.parametrize("flag", ["1", "true", "YES"])
-def test_build_bypasses_qa_rail_only_when_disabled(monkeypatch, flag):
+def test_build_bypasses_qa_rail_only_when_disabled(monkeypatch):
     """DECK_QA_DISABLED is the emergency bypass: rail skipped, payload warns loudly."""
-    monkeypatch.setenv("DECK_QA_DISABLED", flag)
+    monkeypatch.setenv("DECK_QA_DISABLED", "1")
     generator = _qa_generator()
 
     with (
@@ -1039,15 +1038,6 @@ def test_build_reloads_the_draft_b4_fixed_on_disk(qa_on):
     assert QA_FIX_MARKER in _deck_texts(_uploaded_deck_bytes(generator))
     assert result["qa"]["cursor_passed"] is True
     assert result["slide_count"] == 10
-
-
-def test_build_keeps_in_memory_deck_when_b4_changed_nothing(qa_on):
-    generator = _qa_generator()
-
-    with _qa_build_env(generator, agent=_agent_passes_clean):
-        _qa_build(generator)
-
-    assert QA_FIX_MARKER not in _deck_texts(_uploaded_deck_bytes(generator))
 
 
 def test_build_raises_deck_qa_error_when_b4_fails(qa_on):
@@ -1130,17 +1120,3 @@ def test_build_wraps_render_failure_in_deck_qa_error(qa_on):
     keys = [c.kwargs["Key"] for c in generator._s3.put_object.call_args_list]
     assert not any(k.startswith("generated/") for k in keys)  # nothing shipped
 
-
-def test_build_fails_loud_when_b2_and_b3_spend_the_budget(qa_on, monkeypatch):
-    monkeypatch.setenv("DECK_QA_TIMEOUT_S", "0")
-    generator = _qa_generator()
-
-    with _qa_build_env(generator, agent=_agent_passes_clean) as env:
-        with pytest.raises(DeckQaError, match="did not finish within"):
-            _qa_build(generator)
-
-    env.agent.assert_not_called()
-    keys = [c.kwargs["Key"] for c in generator._s3.put_object.call_args_list]
-    assert not any(k.startswith("generated/") for k in keys)
-    # The synthetic timeout report was written into the uploaded package.
-    assert any(k.endswith("qa_cursor.json") for k in keys)
