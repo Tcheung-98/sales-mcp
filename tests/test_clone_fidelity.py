@@ -191,6 +191,31 @@ def test_repeated_clones_share_one_imported_master():
     assert len(target.slide_masters) == before + 1
 
 
+def _layout_id_counts(data: bytes) -> dict[str, int]:
+    zf = zipfile.ZipFile(io.BytesIO(data))
+    ids: list[str] = []
+    for name in zf.namelist():
+        if name.startswith("ppt/slideMasters/") and name.endswith(".xml"):
+            root = ET.fromstring(zf.read(name))
+            for el in root.iter():
+                if el.tag.endswith("sldLayoutId"):
+                    ids.append(el.get("id"))
+    return {k: v for k, v in collections.Counter(ids).items() if v > 1}
+
+
+def test_imported_layout_ids_are_unique_across_masters():
+    """Reusing 2147483649 for every import made PowerPoint repair multi-product decks."""
+    source = Presentation()
+    source.slides.add_slide(source.slide_layouts[1])
+    source.slides.add_slide(source.slide_layouts[2])
+    target = Presentation()
+
+    DeckGenerator._clone_slide(source, 0, target)
+    DeckGenerator._clone_slide(source, 1, target)
+
+    assert _layout_id_counts(_save(target)) == {}
+
+
 def test_imported_master_is_pruned_to_the_used_layout():
     """Importing an untrimmed master would drag a 300-layout product deck along."""
     source = Presentation()

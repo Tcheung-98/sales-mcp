@@ -10,6 +10,7 @@ from starlette.responses import JSONResponse
 from starlette.routing import Route
 
 from ingestion.confirm_mix import confirm_mix_from_dict
+from ingestion.deck_qa import DeckQaError
 from ingestion.generator import DeckGenerator
 from ingestion.gtm_ideation_catalog import (
     GtmIdeationCatalog,
@@ -169,7 +170,15 @@ def build_deck(schema: dict, template_url: str | None = None) -> dict:
     Reach/Index (Audience Data sheet), program category labels, investment blocks,
     thank-you date/logo, bounded Claude copy for intro title, Opportunity
     header/body, audience title, and program one-liners. Unused audience/program
-    variant pages are dropped. No stylist (PI-2754 shelved).
+    variant pages are dropped.
+
+    Every build then passes through the QA gate: a review package (draft + slide
+    PNGs + manifest), deterministic checks, and a headless Cursor vision pass with
+    at most one fix loop — product clones are flag-only. The payload gains a qa{}
+    block (deterministic_passed, cursor_passed, review_package_key). QA that
+    overruns DECK_QA_TIMEOUT_S fails loud (status: error with qa_report) — an
+    unreviewed deck is never delivered. DECK_QA_DISABLED / DECK_QA_SKIP_VISION are
+    local-dev/emergency bypasses only. See docs/DECK-QA-ARCHITECTURE.md §8.
 
     Uploads to S3 and returns a presigned download URL (24h) plus optional
     warnings[] (e.g. >6 audience segments truncated to the 6-card page).
@@ -196,6 +205,13 @@ def build_deck(schema: dict, template_url: str | None = None) -> dict:
         return {"status": "incomplete", "missing": missing, "errors": errors}
     try:
         return _get_generator().build(parsed, template_url)
+    # DeckQaError subclasses ValueError — it must be caught first or the report is lost.
+    except DeckQaError as exc:
+        return {
+            "status": "error",
+            "message": str(exc),
+            "qa_report": exc.report.to_json(),
+        }
     except ValueError as exc:
         return {"status": "error", "message": str(exc)}
     except requests.RequestException as exc:

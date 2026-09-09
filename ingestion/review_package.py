@@ -6,9 +6,8 @@ unused audience/program variants, so the deck is ``8 + P`` slides where
 from slide content: indices 1–5 are the surviving narrative spine and everything
 from 6 to ``5 + P`` is a divider or an A5 product clone.
 
-``plan_pitch_sequence`` is the canonical pitch-section order. ``assemble_skeleton``
-should call the same planner (see deck QA integration PR) so assembly and manifest
-never diverge.
+``plan_pitch_sequence`` is the single source of pitch-section order; PR-F
+refactors ``assemble_skeleton`` onto it so the ordering has one implementation.
 """
 
 from __future__ import annotations
@@ -59,9 +58,10 @@ def plan_pitch_sequence(
 ) -> list[PitchItem]:
     """Funded dividers + A5 clones in Workflow pitch order.
 
-    Mirrors ``DeckGenerator._group_products_by_divider`` plus the ordering loop in
-    ``assemble_skeleton``. Pure: no S3, no template load. Raises ValueError with
-    every placement failure at once (missing GTM row, Events escalation).
+    Drives the ordering loop in ``DeckGenerator.assemble_skeleton``, which calls
+    this rather than keeping a second copy. Pure: no S3, no template load. Raises
+    ValueError with every placement failure at once (missing GTM row, Events
+    escalation).
     """
     groups: list[list[ProductSlideRef]] = [[] for _ in CATEGORY_DIVIDERS]
     failures: list[str] = []
@@ -107,25 +107,26 @@ def build_manifest(
         SlideManifestEntry(slide_index=i, role="narrative")
         for i in range(COVER_INDEX + 1, PITCH_START_INDEX)
     ]
-    for offset, (kind, payload) in enumerate(plan):
+    for offset, item in enumerate(plan):
         index = PITCH_START_INDEX + offset
-        if kind == "divider":
-            slides.append(
-                SlideManifestEntry(
-                    slide_index=index, role="other", slide_kind="divider"
+        match item:
+            case ("divider", _):
+                slides.append(
+                    SlideManifestEntry(
+                        slide_index=index, role="other", slide_kind="divider"
+                    )
                 )
-            )
-        else:
-            slides.append(
-                SlideManifestEntry(
-                    slide_index=index,
-                    role="product",
-                    product_name=payload.product_name,
-                    # Raw GTM Deck Path, not the product-decks/ S3 key.
-                    source_path=payload.deck_path,
-                    source_slide_number=payload.slide_number,
+            case ("product", ref):
+                slides.append(
+                    SlideManifestEntry(
+                        slide_index=index,
+                        role="product",
+                        product_name=ref.product_name,
+                        # Raw GTM Deck Path, not the product-decks/ S3 key.
+                        source_path=ref.deck_path,
+                        source_slide_number=ref.slide_number,
+                    )
                 )
-            )
     slides.append(
         SlideManifestEntry(
             slide_index=slide_count - 2, role="other", slide_kind="investment"
@@ -149,9 +150,9 @@ def _serialize(prs) -> bytes:
     """Save the deck, renumbering slide parts first.
 
     A5 clones arrive carrying their source partnames, so an un-renumbered save
-    emits two zip entries under one ``ppt/slides/slideNN.xml``. ``DeckGenerator.build``
-    also renumbers before upload; packaging must do it here so draft.pptx is valid
-    for B3/B4.
+    emits two zip entries under one ``ppt/slides/slideNN.xml``. ``build()`` fixes
+    that with ``_renumber_slide_parts`` — but only after packaging (§8), which
+    would leave draft.pptx itself malformed for B3/B4.
     """
     prs.part.rename_slide_parts(
         [sld_id.get(qn("r:id")) for sld_id in prs.slides._sldIdLst]
@@ -171,7 +172,7 @@ def _report_json(report: object) -> str:
 
 @dataclass(frozen=True)
 class ReviewPackage:
-    """On-disk review package handed to B3 (deterministic QA) and B4 (vision QA)."""
+    """On-disk review package handed to B3 (deterministic QA) and B4 (Cursor)."""
 
     root: Path
     draft_path: Path

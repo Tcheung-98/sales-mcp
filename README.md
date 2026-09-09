@@ -43,6 +43,10 @@ cp .env.example .env
 | `PRODUCT_DECKS_PREFIX` | S3 prefix for Hunter product decks referenced by Deck Path (default: `product-decks/`) |
 | `FORTUNEAI_TEMPLATE_KEY` | S3 key for Creation spine (default: `templates/FortuneAI_DeckTemplate.pptx`) |
 | `TEMPLATE_URL_ALLOWED_HOSTS` | Optional extra hosts for `build_deck` template URLs (comma-separated) |
+| `DECK_QA_DISABLED` | Bypass the always-on deck QA rail (`1`/`true`/`yes`) — local dev / emergency ops only, never in prod |
+| `DECK_QA_SKIP_VISION` | Run B2+B3 but skip the B4 vision pass (`1`/`true`/`yes`) — local dev only |
+| `DECK_QA_TIMEOUT_S` | Wall-clock budget for the QA rail (default: `600`); overrun fails loud |
+| `CURSOR_API_KEY` | Cursor SDK key for the B4 vision pass — required in production |
 
 ---
 
@@ -192,8 +196,17 @@ Premium Video → Print → Branded Content); product pages under each divider a
 Product Tags clones (`Deck Path` + `Slide #`). **C2** (`apply_placeholders` after assembly):
 fills date/logo/history/audience metrics/program types/investment/thanks, bounded Claude for
 named narrative slots, drops unused audience/program variant pages. Events / Conference products
-fail loud (GTM escalate). Missing or ambiguous map rows fail loud (no Titan substitute). No
-stylist (PI-2754 shelved).
+fail loud (GTM escalate). Missing or ambiguous map rows fail loud (no Titan substitute).
+
+**Headless deck QA gate (B2–B4)** — **always on**: every `build_deck` runs the post-C2
+deck through a review package (draft + slide PNGs + manifest), deterministic checks, and a
+headless Cursor vision pass with at most **one** fix loop; product clones are flag-only. A
+deterministic failure, an explicit QA failure, or a `DECK_QA_TIMEOUT_S` overrun (default 600s)
+returns `status: error` with `qa_report` — an unreviewed deck is never delivered. Review
+packages land under the ephemeral `review-packages/{uuid}/` S3 prefix (expire them with a
+7–30 day lifecycle rule). `DECK_QA_DISABLED` (whole rail) and `DECK_QA_SKIP_VISION` (B4 only)
+are local-dev/emergency bypasses — never set in production.
+Contract: [`docs/DECK-QA-ARCHITECTURE.md`](docs/DECK-QA-ARCHITECTURE.md).
 
 **Per-slide fill method (FortuneAI stock spine, pre-product insert):**
 

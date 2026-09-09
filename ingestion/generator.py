@@ -4,6 +4,8 @@ import json
 import logging
 import os
 import re
+import shutil
+import time
 from urllib.parse import urlparse
 from uuid import uuid4
 
@@ -23,14 +25,18 @@ from pypdf import PdfReader
 
 from ingestion.audience_data import AudienceData, load_audience_data_from_s3
 from ingestion.category_dividers import (
-    CATEGORY_DIVIDERS,
-    FORTUNEAI_DIVIDER_COUNT,
     FORTUNEAI_DIVIDER_SLIDE_INDEX,
     FORTUNEAI_MIN_SLIDES,
     FORTUNEAI_TEMPLATE_BASENAME,
-    divider_index_for_category,
     fortuneai_template_key,
     is_fortuneai_template_url,
+)
+from ingestion.deck_qa import DeckQaError, run_deterministic_qa
+from ingestion.deck_qa_agent import (
+    CursorQaReport,
+    QaIssue,
+    resolve_timeout_s,
+    run_headless_cursor_qa,
 )
 from ingestion.gtm_product_map import (
     GtmProductMap,
@@ -46,6 +52,12 @@ from ingestion.pptx_tools import (
     set_ph_text,
     sync_sections,
 )
+from ingestion.render_slides import RenderSlidesError
+from ingestion.review_package import (
+    ReviewPackage,
+    build_review_package,
+    plan_pitch_sequence,
+)
 from ingestion.schema import DeckSchema
 
 logger = logging.getLogger(__name__)
@@ -57,12 +69,39 @@ _COST_PER_M_OUTPUT = 15.00
 
 _TEMPLATE_URL_HOST_SUFFIXES = (".sharepoint.com", ".sharepoint.us", ".microsoft.com")
 
+# Headless QA gate (docs/DECK-QA-ARCHITECTURE.md §8). QA is always on: every
+# build_deck call runs B2→B3→B4. The two env vars below are bypasses, not
+# feature flags — local dev speed and emergency ops only, never set in prod.
+DECK_QA_DISABLED_ENV = "DECK_QA_DISABLED"
+DECK_QA_SKIP_VISION_ENV = "DECK_QA_SKIP_VISION"
+_DECK_QA_TRUTHY = {"1", "true", "yes"}
+REVIEW_PACKAGE_PREFIX = "review-packages"
+# Payload warning when the rail is bypassed — the caller must see the deck is un-QA'd.
+DECK_QA_BYPASSED_WARNING = (
+    f"deck QA was bypassed via {DECK_QA_DISABLED_ENV}; "
+    "this deck shipped without its quality gate"
+)
+
 _RELS_NS = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
 _PML_NS = "http://schemas.openxmlformats.org/presentationml/2006/main"
 
 
 def _template_key_from_url(template_url: str) -> str:
     return template_url.split("?")[0].rstrip("/").split("/")[-1]
+
+
+def _env_truthy(name: str) -> bool:
+    return os.environ.get(name, "").strip().lower() in _DECK_QA_TRUTHY
+
+
+def deck_qa_disabled() -> bool:
+    """Emergency/local-dev bypass of the whole QA rail (§8). Never set in prod."""
+    return _env_truthy(DECK_QA_DISABLED_ENV)
+
+
+def deck_qa_vision_skipped() -> bool:
+    """Local-dev bypass of B4 only: B2+B3 still run, no Cursor key needed (§8)."""
+    return _env_truthy(DECK_QA_SKIP_VISION_ENV)
 
 
 _SYSTEM_PROMPT_TEMPLATE = """\
@@ -220,6 +259,24 @@ class DeckGenerator:
         )
 
     @staticmethod
+    def _existing_layout_ids(target_prs: PresentationType) -> list[int]:
+        """All ``sldLayoutId/@id`` values already in the package (must be unique)."""
+        ids: list[int] = []
+        for master in target_prs.slide_masters:
+            layout_id_lst = master._element.find(qn("p:sldLayoutIdLst"))
+            if layout_id_lst is None:
+                continue
+            for layout_id_el in layout_id_lst.findall(qn("p:sldLayoutId")):
+                raw = layout_id_el.get("id")
+                if raw is None:
+                    continue
+                try:
+                    ids.append(int(raw))
+                except ValueError:
+                    pass
+        return ids
+
+    @staticmethod
     def _import_slide_layout(target_prs: PresentationType, source_layout):
         """Copy ``source_layout`` — plus its master and theme — into ``target_prs``.
 
@@ -282,10 +339,13 @@ class DeckGenerator:
             )
         for child in list(layout_id_lst):
             layout_id_lst.remove(child)
+        layout_ids = DeckGenerator._existing_layout_ids(target_prs)
+        new_layout_id = max(layout_ids, default=2147483648) + 1
         layout_id_lst.append(
             parse_xml(
                 f'<p:sldLayoutId xmlns:p="{_PML_NS}" xmlns:r="{_RELS_NS}" '
-                f'id="2147483649" r:id="{master_part.relate_to(layout_part, RT.SLIDE_LAYOUT)}"/>'
+                f'id="{new_layout_id}" '
+                f'r:id="{master_part.relate_to(layout_part, RT.SLIDE_LAYOUT)}"/>'
             )
         )
 
@@ -699,28 +759,6 @@ class DeckGenerator:
         logger.info("loaded FortuneAI template from s3://%s/%s", self._bucket, key)
         return Presentation(io.BytesIO(data)), FORTUNEAI_TEMPLATE_BASENAME
 
-    def _group_products_by_divider(
-        self,
-        schema: DeckSchema,
-        gtm_map: GtmProductMap,
-    ) -> list[list[ProductSlideRef]]:
-        """Bucket confirmed products into the five Workflow dividers (A5 lookup)."""
-        groups: list[list[ProductSlideRef]] = [[] for _ in CATEGORY_DIVIDERS]
-        failures: list[str] = []
-        for product in schema.confirmed_products:
-            try:
-                divider_i = divider_index_for_category(product.category)
-                ref = gtm_map.lookup(product.name, product.category)
-            except ValueError as exc:
-                failures.append(str(exc))
-                continue
-            groups[divider_i].append(ref)
-        if failures:
-            raise ValueError(
-                "FortuneAI product placement failed: " + "; ".join(failures)
-            )
-        return groups
-
     def _clone_product_ref(
         self, ref: ProductSlideRef, target_prs: PresentationType
     ):
@@ -756,7 +794,9 @@ class DeckGenerator:
         """
         gtm_map = product_map if product_map is not None else self._get_gtm_product_map()
         # Resolve placement before mutating the template so map misses fail loud early.
-        groups = self._group_products_by_divider(schema, gtm_map)
+        # plan_pitch_sequence is the one implementation of pitch order (§5); the
+        # review-package manifest is built from the same plan.
+        plan = plan_pitch_sequence(schema, gtm_map)
         prs, _template_key = self._load_fortuneai_template(template_url)
 
         if len(prs.slides) < FORTUNEAI_MIN_SLIDES:
@@ -779,21 +819,153 @@ class DeckGenerator:
             self._delete_slide(prs, idx)
 
         insert_at = len(prs.slides) - 2  # before investment + thank you
-        # Insert last funded section first so Workflow order 13→17 lands at insert_at.
-        for i in reversed(range(FORTUNEAI_DIVIDER_COUNT)):
-            refs = groups[i]
-            if not refs:
-                continue
-            for ref in reversed(refs):
-                self._clone_product_ref(ref, prs)
-                self._insert_slide_at(prs, insert_at)
-            self._clone_slide(
-                divider_src_prs, FORTUNEAI_DIVIDER_SLIDE_INDEX[i], prs
-            )
+        for item in reversed(plan):
+            match item:
+                case ("divider", category_index):
+                    src_idx = FORTUNEAI_DIVIDER_SLIDE_INDEX[category_index]
+                    self._clone_slide(divider_src_prs, src_idx, prs)
+                case ("product", ref):
+                    self._clone_product_ref(ref, prs)
             self._insert_slide_at(prs, insert_at)
 
         sync_sections(prs)
         return prs
+
+    def _upload_review_package(self, package: ReviewPackage, prefix: str) -> None:
+        """Copy the review package to ``s3://{bucket}/review-packages/{uuid}/``.
+
+        Ops note: review packages are ephemeral (Hard Rule 8). Expire them with a
+        7–30 day lifecycle rule on the ``review-packages/`` prefix in the bucket —
+        the final PPTX is the deliverable, this is inspection material. An upload
+        failure must not mask the QA verdict, so it is logged and swallowed.
+        """
+        try:
+            for path in sorted(package.root.rglob("*")):
+                if not path.is_file():
+                    continue
+                self._s3.put_object(
+                    Bucket=self._bucket,
+                    Key=prefix + path.relative_to(package.root).as_posix(),
+                    Body=path.read_bytes(),
+                )
+        except Exception:
+            logger.warning(
+                "failed to upload review package to s3://%s/%s",
+                self._bucket,
+                prefix,
+                exc_info=True,
+            )
+            return
+        logger.info("review package uploaded to s3://%s/%s", self._bucket, prefix)
+
+    def _run_deck_qa(
+        self,
+        prs: PresentationType,
+        schema: DeckSchema,
+        gtm_map: GtmProductMap,
+    ) -> tuple[PresentationType, dict]:
+        """Run B2 + B3 + B4 under one ``DECK_QA_TIMEOUT_S`` budget (§8).
+
+        Returns the deck to deliver — re-loaded from disk when B4 saved fixes,
+        otherwise the one passed in — plus the ``qa`` block for the build payload.
+        Raises DeckQaError on a B3 failure, a B4 ``passed: false``, or a timeout:
+        a deck whose quality gate did not complete is not a deliverable. The
+        review package is uploaded to S3 either way, so a timed-out run can be
+        inspected after the fact.
+        """
+        review_id = uuid4()
+        prefix = f"{REVIEW_PACKAGE_PREFIX}/{review_id}/"
+        budget = resolve_timeout_s()
+        deadline = time.monotonic() + budget
+
+        # Packaging renumbers slide parts before saving draft.pptx, so B3/B4 get a
+        # well-formed deck and build()'s own _renumber_slide_parts is a no-op (§8).
+        try:
+            package = build_review_package(
+                prs, schema, plan=plan_pitch_sequence(schema, gtm_map)
+            )
+        except RenderSlidesError as exc:
+            # LibreOffice/poppler failure is infrastructure, but the gate did not
+            # complete, so nothing ships (§8). RenderSlidesError is a RuntimeError;
+            # unwrapped it would escape server.py's handlers as an unstructured crash.
+            report = CursorQaReport(
+                passed=False,
+                issues=[
+                    QaIssue(
+                        None,
+                        "error",
+                        f"review package could not be built (slide render): {exc}",
+                    )
+                ],
+            )
+            raise DeckQaError(
+                f"Deck QA could not render slides for review (review {review_id}): "
+                f"{exc}",
+                report=report,
+            ) from exc
+        try:
+            det_report = run_deterministic_qa(prs, schema, package.manifest)
+            package.write_deterministic_report(det_report)
+            if not det_report.passed:
+                raise DeckQaError(det_report.summary(), report=det_report)
+
+            if deck_qa_vision_skipped():
+                logger.warning(
+                    "B4 vision QA skipped via %s (review %s) — local dev only",
+                    DECK_QA_SKIP_VISION_ENV,
+                    review_id,
+                )
+                return prs, {
+                    "deterministic_passed": True,
+                    "cursor_passed": None,
+                    "vision_skipped": True,
+                    "review_package_key": prefix,
+                }
+
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                # B2 + B3 spent the whole budget; B4 never started.
+                report = CursorQaReport(
+                    passed=False,
+                    issues=[
+                        QaIssue(
+                            None,
+                            "error",
+                            f"deck QA spent its {budget:g}s budget on packaging and "
+                            "deterministic checks; the vision pass never started",
+                        )
+                    ],
+                )
+                package.write_cursor_report(report)
+                raise DeckQaError(
+                    f"Headless deck QA did not finish within {budget:g}s "
+                    f"(review {review_id}); the deck was not delivered — retry, or "
+                    "raise DECK_QA_TIMEOUT_S if renders are legitimately slow",
+                    report=report,
+                )
+
+            agent_report = run_headless_cursor_qa(package, timeout_s=remaining)
+            # The runner cancels itself at its budget and reports the timeout as an
+            # error issue, so a timed-out B4 fails here like any other non-pass:
+            # the quality gate did not complete, so nothing ships (§8).
+            if not agent_report.passed:
+                raise DeckQaError(agent_report.summary(), report=agent_report)
+            if agent_report.fixes_applied:
+                # B4 edits draft.pptx on disk while we hold our own
+                # Presentation; without this re-load the fixes never reach
+                # the uploaded deck (§8). An edit the agent failed to report
+                # arrives here too — the runner reconciles fixes_applied
+                # against the draft's digest.
+                prs = Presentation(str(package.draft_path))
+
+            return prs, {
+                "deterministic_passed": True,
+                "cursor_passed": True,
+                "review_package_key": prefix,
+            }
+        finally:
+            self._upload_review_package(package, prefix)
+            shutil.rmtree(package.root, ignore_errors=True)
 
     def build(
         self,
@@ -803,14 +975,19 @@ class DeckGenerator:
         audience_data: AudienceData | None = None,
         logo_bytes: bytes | None = None,
     ) -> dict:
-        """Assemble FortuneAI PPTX, fill placeholders, upload.
+        """Assemble FortuneAI PPTX, fill placeholders, QA, upload.
 
         template_url: optional pre-authenticated SharePoint download URL for
         FortuneAI_DeckTemplate. When omitted, loads from S3 (FORTUNEAI_TEMPLATE_KEY).
         Product pages use exact GTM Deck Path / Slide #. C2 fills date, logo,
         history, audience Reach/Index, program types, investment, and bounded
         Claude copy for intro, Opportunity, audience title, and program blurbs.
-        No stylist.
+
+        The deck then goes through the QA rail (§8) by default: review package →
+        deterministic checks → headless Cursor vision pass, with a ``qa`` block in
+        the payload. A timeout fails loud — an unreviewed deck is not delivered.
+        DECK_QA_DISABLED bypasses the rail (emergency/local only, with a warning);
+        DECK_QA_SKIP_VISION runs B2+B3 but skips B4 (local dev).
         """
         prs = self.assemble_skeleton(schema, template_url, product_map=product_map)
         audience = (
@@ -826,6 +1003,15 @@ class DeckGenerator:
         warnings = apply_placeholders(
             prs, schema, audience=audience, logo_bytes=logo, ai=ai
         )
+        qa_block = None
+        if deck_qa_disabled():
+            logger.warning(DECK_QA_BYPASSED_WARNING)
+            warnings.append(DECK_QA_BYPASSED_WARNING)
+        else:
+            gtm_map = (
+                product_map if product_map is not None else self._get_gtm_product_map()
+            )
+            prs, qa_block = self._run_deck_qa(prs, schema, gtm_map)
         self._renumber_slide_parts(prs)
         buf = io.BytesIO()
         prs.save(buf)
@@ -837,11 +1023,14 @@ class DeckGenerator:
             ExpiresIn=86400,
         )
         logger.info("deck uploaded to s3://%s/%s", self._bucket, key)
-        return {
+        payload = {
             "download_url": url,
             "slide_count": len(prs.slides),
             "client_name": schema.client_name,
             "template_key": FORTUNEAI_TEMPLATE_BASENAME,
             "warnings": warnings,
         }
+        if qa_block is not None:
+            payload["qa"] = qa_block
+        return payload
 
