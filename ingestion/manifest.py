@@ -40,7 +40,7 @@ class SlideManifestEntry(BaseModel):
 
 
 class ReviewManifest(BaseModel):
-    """Stub contract for the Cursor review package (B2+)."""
+    """Review package manifest (B2+) — slide roles and edit permissions for QA."""
 
     schema_version: Literal["1"] = MANIFEST_SCHEMA_VERSION
     client_name: str
