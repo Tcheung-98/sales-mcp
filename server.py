@@ -80,8 +80,9 @@ def confirm_mix(
     selected_products: list[dict],
 ) -> dict:
     """
-    Validate and lock the associate's final Prodie checkbox selection.
+    Optional legacy: validate a name+category product list and hydrate prices/cadence from GTM.
 
+    Primary path is build_deck(full DeckSchema) with complete confirmed_products[].
     This tool does not propose, rank, score, fund, swap, or add products. Pass the
     complete final list as [{name, category?}, ...]. Product names must exactly
     match GTM Product Tags; category disambiguates duplicate names. The server
@@ -151,9 +152,11 @@ def get_slide_content(deck_id: str, slide_numbers: list[int] | None = None) -> l
 @mcp.tool()
 def build_deck(schema: dict, template_url: str | None = None) -> dict:
     """
-    Assemble a Fortune pitch deck from a confirmed schema (C1 spine + C2 fills).
+    Assemble a Fortune pitch deck from a locked DeckSchema (C1 spine + C2 fills).
 
-    Does not choose products — pass a seller-locked mix (Prodie + I3). Always uses
+    Primary path: upstream (Pitch Deck Builder, Sales HQ, or any caller) sends a
+    complete DeckSchema — Discovery fields plus confirmed_products[] with name,
+    category, price, and cadence. Does not choose or propose products. Always uses
     FortuneAI_DeckTemplate as the Creation spine (intro / narrative /
     conditional category dividers / investment / thank you). Product pages are
     exact GTM Product Tags clones (Deck Path + Slide #).

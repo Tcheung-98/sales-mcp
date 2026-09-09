@@ -1,7 +1,9 @@
-"""Review-package manifest stub for Cursor stylist handoff (Phase B).
+"""Review-package manifest stub for the Deck QA rail (B2+).
 
-``assemble_skeleton`` returns ``AssembledSkeleton`` with product-clone provenance;
-B2 will write draft.pptx + PNGs + a full ``ReviewManifest`` alongside this schema.
+``assemble_skeleton`` currently returns a bare ``Presentation``; product-clone
+provenance for manifests is planned on ``origin/fix/fortuneai-deck-assembly`` /
+``feat/deck-qa-*`` branches. B2 will write draft.pptx + PNGs + a full
+``ReviewManifest`` alongside this schema.
 """
 
 from __future__ import annotations

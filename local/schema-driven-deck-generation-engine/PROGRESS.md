@@ -1,28 +1,29 @@
 # Pitch deck — goal + progress
 
-> **Living file.** Update when a ticket lands or the associate flow changes.  
+> **Living file.** Update when a ticket lands or the upstream handoff changes.  
 > **End-state SoT (do not fork):** [`END-SCOPE-SOT.md`](END-SCOPE-SOT.md)  
 > **Agents:** `.cursor/rules/pitch-deck-end-scope.mdc` is the always-on snapshot of this + the SoT.  
-> **Last updated:** 2026-08-25 (Prodie = relevant-product menu + checkboxes; deckgen = `build_deck`)
+> **Last updated:** 2026-09-09 (sales-mcp = deckgen only; locked DeckSchema from upstream)
 
 ---
 
 ## Goal
 
-Associates pick products from a **Prodie menu**, then deckgen builds a FortuneAI PPTX.
+**sales-mcp is deck generation only.** Upstream owns Discovery + product lock; this repo assembles the PPTX.
 
 ```text
-Form (Discovery) ± SalesGPT conversation
-  → Prodie proposes relevant products (Logic Guide V1 + GTM + inventory)
-  → Associate checkboxes (price + timelines)                    ← I3; gate
-  → pass locked spec → build_deck (C1 spine + A5 clones + C2 fills)
+Pitch Deck Builder / Sales HQ / caller
+  → complete DeckSchema (Discovery + confirmed_products[])
+  → build_deck (validate + C1 spine + A5 clones + C2 fills [+ optional QA rail])
+  → PPTX
 ```
 
-**Prodie selects relevant products and shows them.** It does not build the deck.  
-**The associate’s checks are the mix.**  
-**sales-mcp `build_deck` assembles.** It does not rank products.
+**The caller owns the mix.** Each `confirmed_products[]` entry must include `name`, `category`, `price`, `cadence`.  
+**sales-mcp `build_deck` assembles.** It does not rank, propose, or choose products.
 
-**Humans vet offerings (products).** They do not pick Hunter `Slide #`. After I3 lock, A5 maps each confirmed name/category to `Deck Path` + `Slide #`; C1 pastes that page under the funded divider. C2 never changes those clones.
+**Humans vet offerings (products).** They do not pick Hunter `Slide #`. After upstream lock, A5 maps each confirmed name/category to `Deck Path` + `Slide #`; C1 pastes that page under the funded divider. C2 never changes those clones.
+
+**Prodie is not the ideation brain on this MCP.** Historical Prodie menu/checkbox design lives in [`docs/PRODIE-IDEATION-SPEC.md`](../../docs/PRODIE-IDEATION-SPEC.md) — not the runtime contract.
 
 ---
 
@@ -30,23 +31,21 @@ Form (Discovery) ± SalesGPT conversation
 
 | Step | Owner | Ticket |
 |---|---|---|
-| Form / Discovery fields | Schema + Prodie/UI | C3 done; wire PI-2350 |
-| Propose relevant offerings | **Prodie** (Logic Guide V1 + GTM/inventory) | PI-2350 |
-| Associate select/swap | Prodie checkboxes | I3 / PI-2350 |
-| Optional validate locked mix | `confirm_mix` | I3 MCP (not ranking) |
+| Discovery + product lock | **Upstream** (Pitch Deck Builder / Sales HQ) | PI-2350 (out of repo) |
+| Primary Creation call | `build_deck(full DeckSchema)` | C1/C2 done |
+| Optional name/price hydrate | `confirm_mix` (legacy) | I3 / PI-2761 |
 | Product slide identity | GTM Product Tags exact map | A5 done |
 | Deck body (dividers + clones) | `assemble_skeleton` | C1 landed |
 | Intro/narrative/investment/thanks fills | Placeholder pipeline | C2 **done** |
-| Call `build_deck` with locked spec | Prodie handoff | PI-2350 |
+| Logic Guide engine in repo | Reference/tests only | I2 demoted |
 
-There is no `propose_mix` MCP tool. In-repo `LogicGuideEngine` modules are isolated
-reference/test code, not associate runtime. Guide Media Mix auto-fund is **not** required.
+There is no `propose_mix` MCP tool. `ingestion/logic_guide/` is reference/test code, not associate runtime.
 
-C2 tests stub I3: pass `confirmed_products` as if the associate already chose.
+C2 tests pass `confirmed_products` directly as if upstream already locked the mix.
 
 ---
 
-## Progress (2026-08-25)
+## Progress (2026-09-09)
 
 | ID | Ticket | Status | Notes |
 |---|---|---|---|
@@ -55,15 +54,15 @@ C2 tests stub I3: pass `confirmed_products` as if the associate already chose.
 | A5 | PI-2541 | Done | Exact Deck Path / Slide #; merged #23 |
 | C1 | PI-2756 | **Done** | FortuneAI spine, unfunded dividers dropped, A5 inserts; merged #24 |
 | I1 | PI-2759 | Done | GTM + inventory + pricing sources |
-| I2 | PI-2760 | **Demoted** | MCP mix engine is not associate MVP |
-| I3 | PI-2761 | MCP lock done | Prodie checkbox UI still PI-2350 |
+| I2 | PI-2760 | **Reference only** | LogicGuideEngine — tests/fixtures, not runtime |
+| I3 | PI-2761 | Optional legacy | `confirm_mix` when caller omits full products |
 | C2 | PI-2757 | **Done** | Deterministic + bounded AI fills in `build()` |
-| Wire | PI-2350 | **MVP remaining** | Prodie form + relevant list + checkboxes + pass spec to `build_deck` |
-| Stylist | PI-2754 | Shelved | Not MVP |
+| Upstream wire | PI-2350 | **Out of repo** | Pitch Deck Builder sends locked DeckSchema |
+| Stylist | PI-2754 | Shelved → QA rail | Headless Cursor QA (see DECK-QA-ARCHITECTURE.md) |
 
-**Creation rail** after C2: engineer can `build_deck` with a stubbed mix and get a seller-readable PPTX. Live Claude + manual FortuneAI PPTX review recommended before prod deploy.
+**Creation rail:** `build_deck` with a fully hydrated `DeckSchema` produces a seller-readable PPTX. Live Claude + manual FortuneAI PPTX review recommended before prod deploy.
 
-**Associate rail** still needs Prodie propose + checkbox confirm + `build_deck` handoff.
+**Upstream rail:** Pitch Deck Builder / Sales HQ must send the complete payload — not rely on sales-mcp to ideate.
 
 ---
 
@@ -79,7 +78,7 @@ C2 tests stub I3: pass `confirmed_products` as if the associate already chose.
 | File | Use |
 |---|---|
 | `END-SCOPE-SOT.md` | Canonical end state + Workflow/Logic Guide distillation |
-| `PRODIE-IDEATION-SPEC.md` | Prodie propose + select + pass spec to deckgen |
+| `../../docs/PRODIE-IDEATION-SPEC.md` | **Historical** Prodie ideation design — not sales-mcp runtime contract |
 | `PROGRESS.md` | This file — goal + ticket status |
 | `C2-PLACEHOLDER-INVENTORY.md` | C2 Chunk 0 token/shape locks |
 | `PI-2757-TECH-DEBT.md` | C2 leftover gaps |
