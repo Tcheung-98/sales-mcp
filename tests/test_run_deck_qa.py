@@ -552,6 +552,23 @@ def test_missing_api_key_fails_loud(tmp_path, monkeypatch):
         run_headless_cursor_qa(package, timeout_s=30)
 
 
+def test_sdk_session_failure_returns_failed_report(tmp_path, monkeypatch):
+    root = _write_package(tmp_path / "pkg")
+    package = load_review_package(root)
+    _install_fake_sdk(monkeypatch)
+    module = sys.modules["cursor_sdk"]
+
+    def _boom_create(cls, options=None, **_kwargs):
+        raise RuntimeError("sdk unavailable")
+
+    monkeypatch.setattr(module.Agent, "create", classmethod(_boom_create))
+
+    report = run_headless_cursor_qa(package, timeout_s=30)
+
+    assert report.passed is False
+    assert any("sdk unavailable" in issue.message for issue in report.issues)
+
+
 def test_prompt_carries_the_skill_and_the_manifest(tmp_path, monkeypatch):
     root = _write_package(tmp_path / "pkg")
     package = load_review_package(root)

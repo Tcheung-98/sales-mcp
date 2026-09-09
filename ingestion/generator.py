@@ -819,12 +819,13 @@ class DeckGenerator:
             self._delete_slide(prs, idx)
 
         insert_at = len(prs.slides) - 2  # before investment + thank you
-        for kind, payload in reversed(plan):
-            if kind == "divider":
-                src_idx = FORTUNEAI_DIVIDER_SLIDE_INDEX[payload]
-                self._clone_slide(divider_src_prs, src_idx, prs)
-            else:
-                self._clone_product_ref(payload, prs)
+        for item in reversed(plan):
+            match item:
+                case ("divider", category_index):
+                    src_idx = FORTUNEAI_DIVIDER_SLIDE_INDEX[category_index]
+                    self._clone_slide(divider_src_prs, src_idx, prs)
+                case ("product", ref):
+                    self._clone_product_ref(ref, prs)
             self._insert_slide_at(prs, insert_at)
 
         sync_sections(prs)

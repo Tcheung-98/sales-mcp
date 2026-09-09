@@ -107,25 +107,26 @@ def build_manifest(
         SlideManifestEntry(slide_index=i, role="narrative")
         for i in range(COVER_INDEX + 1, PITCH_START_INDEX)
     ]
-    for offset, (kind, payload) in enumerate(plan):
+    for offset, item in enumerate(plan):
         index = PITCH_START_INDEX + offset
-        if kind == "divider":
-            slides.append(
-                SlideManifestEntry(
-                    slide_index=index, role="other", slide_kind="divider"
+        match item:
+            case ("divider", _):
+                slides.append(
+                    SlideManifestEntry(
+                        slide_index=index, role="other", slide_kind="divider"
+                    )
                 )
-            )
-        else:
-            slides.append(
-                SlideManifestEntry(
-                    slide_index=index,
-                    role="product",
-                    product_name=payload.product_name,
-                    # Raw GTM Deck Path, not the product-decks/ S3 key.
-                    source_path=payload.deck_path,
-                    source_slide_number=payload.slide_number,
+            case ("product", ref):
+                slides.append(
+                    SlideManifestEntry(
+                        slide_index=index,
+                        role="product",
+                        product_name=ref.product_name,
+                        # Raw GTM Deck Path, not the product-decks/ S3 key.
+                        source_path=ref.deck_path,
+                        source_slide_number=ref.slide_number,
+                    )
                 )
-            )
     slides.append(
         SlideManifestEntry(
             slide_index=slide_count - 2, role="other", slide_kind="investment"
