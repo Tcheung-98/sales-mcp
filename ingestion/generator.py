@@ -32,7 +32,12 @@ from ingestion.category_dividers import (
     is_fortuneai_template_url,
 )
 from ingestion.deck_qa import DeckQaError, run_deterministic_qa
-from ingestion.deck_qa_agent import resolve_timeout_s, run_headless_cursor_qa
+from ingestion.deck_qa_agent import (
+    CursorQaReport,
+    QaIssue,
+    resolve_timeout_s,
+    run_headless_cursor_qa,
+)
 from ingestion.gtm_product_map import (
     GtmProductMap,
     ProductSlideRef,
@@ -63,10 +68,18 @@ _COST_PER_M_OUTPUT = 15.00
 
 _TEMPLATE_URL_HOST_SUFFIXES = (".sharepoint.com", ".sharepoint.us", ".microsoft.com")
 
-# Headless QA gate (docs/DECK-QA-ARCHITECTURE.md §8).
-DECK_QA_ENABLED_ENV = "DECK_QA_ENABLED"
+# Headless QA gate (docs/DECK-QA-ARCHITECTURE.md §8). QA is always on: every
+# build_deck call runs B2→B3→B4. The two env vars below are bypasses, not
+# feature flags — local dev speed and emergency ops only, never set in prod.
+DECK_QA_DISABLED_ENV = "DECK_QA_DISABLED"
+DECK_QA_SKIP_VISION_ENV = "DECK_QA_SKIP_VISION"
 _DECK_QA_TRUTHY = {"1", "true", "yes"}
 REVIEW_PACKAGE_PREFIX = "review-packages"
+# Payload warning when the rail is bypassed — the caller must see the deck is un-QA'd.
+DECK_QA_BYPASSED_WARNING = (
+    f"deck QA was bypassed via {DECK_QA_DISABLED_ENV}; "
+    "this deck shipped without its quality gate"
+)
 
 _RELS_NS = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
 _PML_NS = "http://schemas.openxmlformats.org/presentationml/2006/main"
@@ -76,9 +89,18 @@ def _template_key_from_url(template_url: str) -> str:
     return template_url.split("?")[0].rstrip("/").split("/")[-1]
 
 
-def deck_qa_enabled() -> bool:
-    """Whether the QA rail runs (§8). Unset or anything else → ``build`` as today."""
-    return os.environ.get(DECK_QA_ENABLED_ENV, "").strip().lower() in _DECK_QA_TRUTHY
+def _env_truthy(name: str) -> bool:
+    return os.environ.get(name, "").strip().lower() in _DECK_QA_TRUTHY
+
+
+def deck_qa_disabled() -> bool:
+    """Emergency/local-dev bypass of the whole QA rail (§8). Never set in prod."""
+    return _env_truthy(DECK_QA_DISABLED_ENV)
+
+
+def deck_qa_vision_skipped() -> bool:
+    """Local-dev bypass of B4 only: B2+B3 still run, no Cursor key needed (§8)."""
+    return _env_truthy(DECK_QA_SKIP_VISION_ENV)
 
 
 _SYSTEM_PROMPT_TEMPLATE = """\
@@ -818,14 +840,15 @@ class DeckGenerator:
         prs: PresentationType,
         schema: DeckSchema,
         gtm_map: GtmProductMap,
-        warnings: list[str],
     ) -> tuple[PresentationType, dict]:
         """Run B2 + B3 + B4 under one ``DECK_QA_TIMEOUT_S`` budget (§8).
 
         Returns the deck to deliver — re-loaded from disk when B4 saved fixes,
         otherwise the one passed in — plus the ``qa`` block for the build payload.
-        Raises DeckQaError on a quality verdict (B3 failure, B4 ``passed: false``);
-        a timeout is infrastructure, so it warns and ships the deck as it stands.
+        Raises DeckQaError on a B3 failure, a B4 ``passed: false``, or a timeout:
+        a deck whose quality gate did not complete is not a deliverable. The
+        review package is uploaded to S3 either way, so a timed-out run can be
+        inspected after the fact.
         """
         review_id = uuid4()
         prefix = f"{REVIEW_PACKAGE_PREFIX}/{review_id}/"
@@ -843,41 +866,58 @@ class DeckGenerator:
             if not det_report.passed:
                 raise DeckQaError(det_report.summary(), report=det_report)
 
-            agent_report = None
-            timed_out = True  # B2 + B3 spent the budget below; B4 never starts
-            remaining = deadline - time.monotonic()
-            if remaining > 0:
-                started = time.monotonic()
-                agent_report = run_headless_cursor_qa(package, timeout_s=remaining)
-                # The runner cancels itself at its own budget, so a non-pass that
-                # burned all of it is a timeout, not a verdict on the deck.
-                timed_out = (
-                    not agent_report.passed
-                    and time.monotonic() - started >= remaining
+            if deck_qa_vision_skipped():
+                logger.warning(
+                    "B4 vision QA skipped via %s (review %s) — local dev only",
+                    DECK_QA_SKIP_VISION_ENV,
+                    review_id,
                 )
-                if not timed_out:
-                    if not agent_report.passed:
-                        raise DeckQaError(agent_report.summary(), report=agent_report)
-                    if agent_report.fixes_applied:
-                        # B4 edits draft.pptx on disk while we hold our own
-                        # Presentation; without this re-load the fixes never reach
-                        # the uploaded deck (§8). An edit the agent failed to report
-                        # arrives here too — the runner reconciles fixes_applied
-                        # against the draft's digest.
-                        prs = Presentation(str(package.draft_path))
+                return prs, {
+                    "deterministic_passed": True,
+                    "cursor_passed": None,
+                    "vision_skipped": True,
+                    "review_package_key": prefix,
+                }
 
-            if timed_out:
-                message = (
-                    f"Headless deck QA did not finish within {budget:g}s; the deck "
-                    f"was delivered without a completed QA pass (review {review_id})"
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                # B2 + B3 spent the whole budget; B4 never started.
+                report = CursorQaReport(
+                    passed=False,
+                    issues=[
+                        QaIssue(
+                            None,
+                            "error",
+                            f"deck QA spent its {budget:g}s budget on packaging and "
+                            "deterministic checks; the vision pass never started",
+                        )
+                    ],
                 )
-                logger.warning("%s; package s3://%s/%s", message, self._bucket, prefix)
-                warnings.append(message)
+                package.write_cursor_report(report)
+                raise DeckQaError(
+                    f"Headless deck QA did not finish within {budget:g}s "
+                    f"(review {review_id}); the deck was not delivered — retry, or "
+                    "raise DECK_QA_TIMEOUT_S if renders are legitimately slow",
+                    report=report,
+                )
+
+            agent_report = run_headless_cursor_qa(package, timeout_s=remaining)
+            # The runner cancels itself at its budget and reports the timeout as an
+            # error issue, so a timed-out B4 fails here like any other non-pass:
+            # the quality gate did not complete, so nothing ships (§8).
+            if not agent_report.passed:
+                raise DeckQaError(agent_report.summary(), report=agent_report)
+            if agent_report.fixes_applied:
+                # B4 edits draft.pptx on disk while we hold our own
+                # Presentation; without this re-load the fixes never reach
+                # the uploaded deck (§8). An edit the agent failed to report
+                # arrives here too — the runner reconciles fixes_applied
+                # against the draft's digest.
+                prs = Presentation(str(package.draft_path))
 
             return prs, {
                 "deterministic_passed": True,
-                "cursor_passed": bool(agent_report and agent_report.passed),
-                "timed_out": timed_out,
+                "cursor_passed": True,
                 "review_package_key": prefix,
             }
         finally:
@@ -900,9 +940,11 @@ class DeckGenerator:
         history, audience Reach/Index, program types, investment, and bounded
         Claude copy for intro, Opportunity, audience title, and program blurbs.
 
-        With DECK_QA_ENABLED set, the deck then goes through the QA rail (§8):
-        review package → deterministic checks → headless Cursor vision pass, with
-        a ``qa`` block in the payload. Unset, none of that runs.
+        The deck then goes through the QA rail (§8) by default: review package →
+        deterministic checks → headless Cursor vision pass, with a ``qa`` block in
+        the payload. A timeout fails loud — an unreviewed deck is not delivered.
+        DECK_QA_DISABLED bypasses the rail (emergency/local only, with a warning);
+        DECK_QA_SKIP_VISION runs B2+B3 but skips B4 (local dev).
         """
         prs = self.assemble_skeleton(schema, template_url, product_map=product_map)
         audience = (
@@ -919,11 +961,14 @@ class DeckGenerator:
             prs, schema, audience=audience, logo_bytes=logo, ai=ai
         )
         qa_block = None
-        if deck_qa_enabled():
+        if deck_qa_disabled():
+            logger.warning(DECK_QA_BYPASSED_WARNING)
+            warnings.append(DECK_QA_BYPASSED_WARNING)
+        else:
             gtm_map = (
                 product_map if product_map is not None else self._get_gtm_product_map()
             )
-            prs, qa_block = self._run_deck_qa(prs, schema, gtm_map, warnings)
+            prs, qa_block = self._run_deck_qa(prs, schema, gtm_map)
         self._renumber_slide_parts(prs)
         buf = io.BytesIO()
         prs.save(buf)

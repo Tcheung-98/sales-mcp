@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import io
+import os
 import re
 import sys
 
@@ -122,6 +123,9 @@ def _run_mock_ai() -> int:
 
 
 def _run_live() -> int:
+    # QA is always on; this smoke targets assembly + fills. Opt back into the
+    # rail by exporting DECK_QA_DISABLED= (empty) with LibreOffice + CURSOR_API_KEY set.
+    os.environ.setdefault("DECK_QA_DISABLED", "1")
     gen = DeckGenerator()
     schema = _schema()
     result = gen.build(schema, logo_bytes=MINIMAL_PNG)

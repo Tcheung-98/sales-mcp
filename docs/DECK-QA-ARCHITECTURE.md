@@ -31,7 +31,7 @@ Locked DeckSchema (complete payload from upstream caller)
   → final.pptx upload + presigned URL
 ```
 
-**Prodie does not run Cursor.** `sales-mcp` (or a co-located worker it calls) runs the QA rail. Prodie is not required on this path — any MCP client that calls `build_deck` with a locked schema gets the rail when enabled.
+**Prodie does not run Cursor.** `sales-mcp` (or a co-located worker it calls) runs the QA rail. Prodie is not required on this path — any MCP client that calls `build_deck` with a locked schema gets the rail. **The rail is always on** (§8); `DECK_QA_DISABLED` / `DECK_QA_SKIP_VISION` are local-dev/emergency bypasses, never production config.
 
 ---
 
@@ -328,7 +328,9 @@ Runner: `scripts/run_deck_qa.py` (invokes Cursor SDK — **not** an MCP tool exp
 warnings = apply_placeholders(prs, schema, audience=..., logo_bytes=..., ai=ai)
 
 qa_block = None
-if _deck_qa_enabled():
+if deck_qa_disabled():          # emergency/local bypass only — warn loudly
+    warnings.append("deck QA was bypassed via DECK_QA_DISABLED; ...")
+else:
     # build_review_package renumbers slide parts before saving draft.pptx and
     # mutates prs in the process — see "three things" note 2 below.
     package = build_review_package(prs, schema, plan=plan)   # kwarg name: `plan`, see §5
@@ -337,8 +339,10 @@ if _deck_qa_enabled():
     if not det_report.passed:
         raise DeckQaError(det_report.summary(), report=det_report)
 
-    agent_report = run_headless_cursor_qa(package, timeout_s=DECK_QA_TIMEOUT_S)
-    if not agent_report.passed:
+    # DECK_QA_SKIP_VISION (local dev): stop here with qa.vision_skipped: true
+
+    agent_report = run_headless_cursor_qa(package, timeout_s=remaining_budget)
+    if not agent_report.passed:   # includes B4 timeout — the runner reports it
         raise DeckQaError(agent_report.summary(), report=agent_report)
 
     # B4 edits draft.pptx ON DISK. Re-load it or every fix is thrown away.
@@ -386,39 +390,40 @@ Return shape addition (backward compatible):
   "qa": {
     "deterministic_passed": true,
     "cursor_passed": true,
-    "timed_out": false,
     "review_package_key": "review-packages/{uuid}/"
   }
 }
 ```
 
+With `DECK_QA_SKIP_VISION` (local dev), `cursor_passed` is `null` and the block gains `vision_skipped: true`.
+
 On failure the `qa` block is not returned (the call raises); the report travels in `qa_report` per the failure semantics above.
 
 ### Environment
 
+**QA is always on.** Every `build_deck` call runs the rail; the two bypasses exist for local dev and emergency ops and must never be set in production.
+
 | Var | Default | Meaning |
 |-----|---------|---------|
-| `DECK_QA_ENABLED` | `false` | Unset or anything outside `{"1","true","yes"}` (case-insensitive) → skip the whole rail; `build()` behaves exactly as today |
-| `DECK_QA_TIMEOUT_S` | `600` | Wall-clock budget for B2+B3+B4 combined |
-| `CURSOR_API_KEY` | — | Required when `DECK_QA_ENABLED` is truthy |
+| `DECK_QA_DISABLED` | unset | `1`/`true`/`yes` (case-insensitive) → skip the whole rail; the deck ships with a loud `warnings[]` entry. Emergency ops / local dev only |
+| `DECK_QA_SKIP_VISION` | unset | `1`/`true`/`yes` → run B2+B3, skip B4. Local dev without a Cursor key |
+| `DECK_QA_TIMEOUT_S` | `600` | Wall-clock budget for B2+B3+B4 combined; overrun **fails loud** |
+| `CURSOR_API_KEY` | — | Required in production (B4 vision pass) |
 
-### Resolved: `build_deck` stays synchronous and fails soft on timeout
+`DECK_QA_ENABLED` is **retired** — the rail no longer has an opt-in flag.
+
+### Resolved: `build_deck` stays synchronous and fails loud on timeout
 
 `build_deck` is an MCP tool that upstream clients call and block on. Today it is one LibreOffice-free assembly plus a handful of Claude calls. With the rail on, a single call additionally does: a LibreOffice PPTX→PDF conversion, ~16 `pdftoppm` rasterizations, and a headless Cursor agent session with up to 16 attached images and a fix loop. That is plausibly **several minutes**, against MCP clients that commonly time out well before that.
 
-**Decision (2026-09-08): option (a) — ship synchronous, fail soft on timeout.** Considered and rejected: **(b)** fail closed on timeout, which makes a slow runner indistinguishable from a bad deck and blocks the associate; **(c)** split into `build_deck` → `{"status": "qa_pending", "review_id": ...}` plus a second poll tool, which is the architecturally correct answer but changes the upstream contract and therefore pulls PI-2350 into this track.
+**Decision (2026-09-09, supersedes 2026-09-08 fail-soft):** the product intent is that `build_deck` output is always associate-sendable. A deck whose quality gate did not complete is not a deliverable, so a timeout **raises `DeckQaError`** like any other QA failure — the earlier fail-soft behavior (ship un-QA'd with `qa.timed_out: true`) silently delivered exactly the decks most likely to need fixes. Considered and still rejected: **(c)** split into `build_deck` → `{"status": "qa_pending", "review_id": ...}` plus a poll tool — architecturally correct for long runs, but it changes the upstream contract and pulls PI-2350 into this track; revisit if timeout rates are not near zero.
 
-Option (a) is the only one that keeps `DECK_QA_ENABLED=false` and `=true` on the same call signature, which is what lets the flag be a true no-op rollback.
-
-**What PR-F must implement:**
+**Timeout semantics:**
 
 1. B2 + B3 + B4 run inside `build()` under a single `DECK_QA_TIMEOUT_S` budget (default `600`).
-2. **On timeout, do not raise.** Upload the deck as it stands and return normally with `qa.cursor_passed: false`, `qa.timed_out: true`, and a human-readable entry appended to the existing `warnings[]` list. Associates already read `warnings[]`, so the degradation is visible without a new field they'd have to learn.
-3. **A timeout is not a QA failure.** `DeckQaError` is for B3 failing or B4 returning `passed: false` — genuine quality verdicts that must fail loud per Hard Rule 5. A timeout is an infrastructure symptom and must not be laundered into either a pass or a quality failure.
-4. **B3 failures still raise**, regardless of the timeout budget. B3 is fast, deterministic, and has no legitimate reason to time out; a deterministic failure means the deck is actually wrong.
-5. Log timeouts at `WARNING` with the `review_id`, so the rate of soft-failures is measurable. If it is not near zero in practice, revisit **(c)** — a gate that times out often is not a gate.
-
-This weakens the guarantee: under sustained timeouts a deck can ship un-QA'd. That is accepted for MVP because the alternative blocks delivery on runner latency, and because the review package is still written to S3 for after-the-fact inspection.
+2. **On timeout, raise.** The B4 runner cancels itself at its budget and returns `passed: false` with a timeout error issue; the budget spent before B4 even starts raises with a synthetic report. Either way `build_deck` returns `status: error` with `qa_report` — the caller can retry, and the review package is already on S3 for inspection.
+3. **B3 failures raise** regardless of the timeout budget. B3 is fast, deterministic, and has no legitimate reason to time out; a deterministic failure means the deck is actually wrong.
+4. Log timeouts at `WARNING`/`ERROR` with the `review_id`, so the timeout rate is measurable. If it is not near zero in practice, fix the infrastructure or revisit **(c)** — a gate that times out often is not a gate.
 
 ---
 
@@ -435,7 +440,7 @@ Wave 2 (after Wave 1 merges):
   PR-E  scripts/run_deck_qa.py (Cursor SDK headless runner)
 
 Wave 3 (after PR-E):
-  PR-F  Wire build_deck + server docstring + DECK_QA_ENABLED
+  PR-F  Wire build_deck + server docstring + always-on gate (DECK_QA_DISABLED / DECK_QA_SKIP_VISION bypasses)
 ```
 
 **Serialization rule:** Only **one** open PR may touch `ingestion/generator.py` at a time (Wave 3).
@@ -537,3 +542,4 @@ Two other stale statements to clean up while nearby (either PR is fine, just not
 | 2026-09-08 | §8 open decision resolved: `build_deck` stays synchronous and **fails soft** on timeout (`qa.timed_out`, warning appended, deck still delivered). A timeout is infrastructure, not a quality verdict — B3 failures and B4 `passed: false` still raise `DeckQaError` |
 | 2026-09-08 | Wave 1 landed (PI-2522 B2, B3, deck-qa skill, BambooHR golden). §8 corrected: `draft.pptx` must be renumbered before saving or A5 clones emit duplicate `ppt/slides/slideNN.xml` zip entries; the prior "never byte-identical" rationale was wrong |
 | 2026-09-08 | Verified against the checkout and corrected before subagent deploy: base branch is `fix/fortuneai-deck-assembly` (PR #31), not `main`; §5 post-C2 index map rewritten (was `1–11 narrative`, actually `1–5`, which would have marked A5 clones editable); §5 provenance sourcing and `PI-2522` prerequisite documented; §6 leftover-token list completed from source constants; §4/§7 fix method changed from `apply_replacements` to `replace_token`; §8 in-memory-vs-on-disk reload bug, `DeckQaError` failure semantics, runner import path, and sync-call timeout risk called out; §12 golden products flagged as unverified; §13 matrix gaps closed |
+| 2026-09-09 | **Contract change: QA is always on.** `DECK_QA_ENABLED` retired; the rail runs on every `build_deck` call. `DECK_QA_DISABLED` (whole rail) and `DECK_QA_SKIP_VISION` (B4 only) added as local-dev/emergency bypasses that must never be set in prod. Timeout decision superseded: **fail loud** — a timeout raises `DeckQaError` (`status: error` with `qa_report`) instead of shipping an un-QA'd deck with `qa.timed_out`. `qa.timed_out` removed from the success payload |

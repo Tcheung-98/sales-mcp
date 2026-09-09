@@ -1,5 +1,7 @@
 # Deck QA subagent deployment prompts
 
+> **Historical record** (2026-09-08 build-out). References to `DECK_QA_ENABLED` and fail-soft timeout below are superseded — the rail is now **always on** with `DECK_QA_DISABLED` / `DECK_QA_SKIP_VISION` bypasses and a **fail-loud** timeout. See `docs/DECK-QA-ARCHITECTURE.md` §8 (2026-09-09 changelog entry).
+
 > Copy one prompt per subagent. **Every agent must read `docs/DECK-QA-ARCHITECTURE.md` first** and cite it in the PR.  
 > **Repo:** `/Users/tcheung/Library/CloudStorage/OneDrive-FortuneMedia(USA)Corporation/Documents/GitHub/sales-mcp`  
 > **Base branch:** `fix/fortuneai-deck-assembly` — **not `main`**. See below.  

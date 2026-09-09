@@ -12,7 +12,7 @@ from pptx.util import Inches
 
 from ingestion.deck_qa import DeckQaError, QaCheckResult, QaReport
 from ingestion.deck_qa_agent import CursorQaReport, QaIssue
-from ingestion.generator import DeckGenerator
+from ingestion.generator import DECK_QA_BYPASSED_WARNING, DeckGenerator
 from ingestion.gtm_product_map import GtmProductMap, ProductSlideRef
 from ingestion.pptx_tools import apply_replacements
 from ingestion.review_package import build_review_package
@@ -78,6 +78,20 @@ def _build_generator() -> DeckGenerator:
     generator._blank_bytes = _blank_bytes(slide_count=6)
     generator._api_key = "test-key"
     return generator
+
+
+@pytest.fixture(autouse=True)
+def _bypass_always_on_qa(monkeypatch):
+    """QA is always on (§8), so assembly/fill unit tests here run under the
+    local-dev bypass; the gate tests below re-enable the rail via ``qa_on``."""
+    monkeypatch.setenv("DECK_QA_DISABLED", "1")
+    monkeypatch.delenv("DECK_QA_SKIP_VISION", raising=False)
+
+
+@pytest.fixture
+def qa_on(monkeypatch):
+    """Re-enable the always-on QA rail for the gate tests."""
+    monkeypatch.delenv("DECK_QA_DISABLED", raising=False)
 
 
 def _patch_build_ai():
@@ -455,7 +469,8 @@ def test_build_happy_path_returns_payload():
     assert result["client_name"] == "Acme Corp"
     assert result["template_key"] == "FortuneAI_DeckTemplate.pptx"
     assert result["slide_count"] == 10
-    assert result["warnings"] == []
+    # The autouse bypass fixture skips the rail, which must be loud in the payload.
+    assert result["warnings"] == [DECK_QA_BYPASSED_WARNING]
     mock_load.assert_called_with("product-decks/Fortune_Newsletters_2026.pptx")
     generator._s3.put_object.assert_called_once()
     put_kwargs = generator._s3.put_object.call_args.kwargs
@@ -946,13 +961,10 @@ def _agent_fixes_the_draft(package, **kwargs):
     return CursorQaReport(passed=True, loop_count=1, fixes_applied=["opportunity_body"])
 
 
-@pytest.mark.parametrize("flag", [None, "false", "0", "off"])
-def test_build_skips_qa_rail_unless_flag_is_truthy(monkeypatch, flag):
-    """The flag is the rollback: anything but 1/true/yes leaves build() as it was."""
-    if flag is None:
-        monkeypatch.delenv("DECK_QA_ENABLED", raising=False)
-    else:
-        monkeypatch.setenv("DECK_QA_ENABLED", flag)
+@pytest.mark.parametrize("flag", ["1", "true", "YES"])
+def test_build_bypasses_qa_rail_only_when_disabled(monkeypatch, flag):
+    """DECK_QA_DISABLED is the emergency bypass: rail skipped, payload warns loudly."""
+    monkeypatch.setenv("DECK_QA_DISABLED", flag)
     generator = _qa_generator()
 
     with (
@@ -970,12 +982,13 @@ def test_build_skips_qa_rail_unless_flag_is_truthy(monkeypatch, flag):
     mock_agent.assert_not_called()
     assert "qa" not in result
     assert result["slide_count"] == 10
-    assert result["warnings"] == []
+    assert result["warnings"] == [DECK_QA_BYPASSED_WARNING]
     generator._s3.put_object.assert_called_once()
 
 
-def test_build_qa_enabled_uploads_review_package_and_returns_qa_block(monkeypatch):
-    monkeypatch.setenv("DECK_QA_ENABLED", "TRUE")
+def test_build_runs_qa_rail_by_default_and_returns_qa_block(qa_on, monkeypatch):
+    """No flags set → the rail runs. The retired DECK_QA_ENABLED must not gate it."""
+    monkeypatch.setenv("DECK_QA_ENABLED", "false")  # retired flag, must be inert
     generator = _qa_generator()
 
     with _qa_build_env(generator, agent=_agent_passes_clean) as env:
@@ -987,7 +1000,6 @@ def test_build_qa_enabled_uploads_review_package_and_returns_qa_block(monkeypatc
     assert result["qa"] == {
         "deterministic_passed": True,
         "cursor_passed": True,
-        "timed_out": False,
         "review_package_key": prefix,
     }
     assert result["slide_count"] == 10
@@ -998,9 +1010,26 @@ def test_build_qa_enabled_uploads_review_package_and_returns_qa_block(monkeypatc
     assert not env.packages[0].root.exists()  # ephemeral: S3 keeps the copy
 
 
-def test_build_reloads_the_draft_b4_fixed_on_disk(monkeypatch):
+def test_build_skips_vision_only_when_flag_set(qa_on, monkeypatch):
+    """DECK_QA_SKIP_VISION (local dev): B2+B3 still run, B4 does not."""
+    monkeypatch.setenv("DECK_QA_SKIP_VISION", "1")
+    generator = _qa_generator()
+
+    with _qa_build_env(generator, agent=_agent_passes_clean) as env:
+        result = _qa_build(generator)
+
+    env.agent.assert_not_called()
+    assert result["qa"]["deterministic_passed"] is True
+    assert result["qa"]["cursor_passed"] is None
+    assert result["qa"]["vision_skipped"] is True
+    keys = [c.kwargs["Key"] for c in generator._s3.put_object.call_args_list]
+    prefix = result["qa"]["review_package_key"]
+    assert f"{prefix}manifest.json" in keys  # B2 ran and was uploaded
+    _uploaded_deck_bytes(generator)  # the deck shipped
+
+
+def test_build_reloads_the_draft_b4_fixed_on_disk(qa_on):
     """The fix B4 saved must reach the delivered deck, not just the package (§8)."""
-    monkeypatch.setenv("DECK_QA_ENABLED", "yes")
     generator = _qa_generator()
 
     with _qa_build_env(generator, agent=_agent_fixes_the_draft):
@@ -1011,8 +1040,7 @@ def test_build_reloads_the_draft_b4_fixed_on_disk(monkeypatch):
     assert result["slide_count"] == 10
 
 
-def test_build_keeps_in_memory_deck_when_b4_changed_nothing(monkeypatch):
-    monkeypatch.setenv("DECK_QA_ENABLED", "1")
+def test_build_keeps_in_memory_deck_when_b4_changed_nothing(qa_on):
     generator = _qa_generator()
 
     with _qa_build_env(generator, agent=_agent_passes_clean):
@@ -1021,8 +1049,7 @@ def test_build_keeps_in_memory_deck_when_b4_changed_nothing(monkeypatch):
     assert QA_FIX_MARKER not in _deck_texts(_uploaded_deck_bytes(generator))
 
 
-def test_build_raises_deck_qa_error_when_b4_fails(monkeypatch):
-    monkeypatch.setenv("DECK_QA_ENABLED", "1")
+def test_build_raises_deck_qa_error_when_b4_fails(qa_on):
     generator = _qa_generator()
     failed = CursorQaReport(
         passed=False, issues=[QaIssue(3, "error", "Opportunity body overflows")]
@@ -1039,8 +1066,7 @@ def test_build_raises_deck_qa_error_when_b4_fails(monkeypatch):
     )
 
 
-def test_build_raises_deck_qa_error_when_b3_fails(monkeypatch):
-    monkeypatch.setenv("DECK_QA_ENABLED", "1")
+def test_build_raises_deck_qa_error_when_b3_fails(qa_on):
     generator = _qa_generator()
     det = QaReport(
         checks=[QaCheckResult(name="leftover_tokens", passed=False, message="[TITLE]")]
@@ -1055,9 +1081,8 @@ def test_build_raises_deck_qa_error_when_b3_fails(monkeypatch):
     env.agent.assert_not_called()
 
 
-def test_build_ships_the_deck_when_qa_runs_out_of_budget(monkeypatch):
-    """A timeout is infrastructure, not a quality verdict: warn and deliver (§8)."""
-    monkeypatch.setenv("DECK_QA_ENABLED", "1")
+def test_build_fails_loud_when_b4_burns_its_budget(qa_on, monkeypatch):
+    """A gate that did not complete is not a deliverable: timeout raises (§8)."""
     monkeypatch.setenv("DECK_QA_TIMEOUT_S", "0.2")
     generator = _qa_generator()
 
@@ -1068,25 +1093,25 @@ def test_build_ships_the_deck_when_qa_runs_out_of_budget(monkeypatch):
         )
 
     with _qa_build_env(generator, agent=_agent_burns_its_budget) as env:
-        result = _qa_build(generator)
+        with pytest.raises(DeckQaError, match="timed out"):
+            _qa_build(generator)
 
     env.agent.assert_called_once()
-    assert result["qa"]["timed_out"] is True
-    assert result["qa"]["cursor_passed"] is False
-    assert result["slide_count"] == 10
-    assert len(result["warnings"]) == 1
-    assert "did not finish within" in result["warnings"][0]
-    _uploaded_deck_bytes(generator)  # the deck still shipped
+    keys = [c.kwargs["Key"] for c in generator._s3.put_object.call_args_list]
+    assert not any(k.startswith("generated/") for k in keys)  # nothing shipped
+    assert any(k.startswith("review-packages/") for k in keys)  # inspectable
 
 
-def test_build_skips_b4_when_b2_and_b3_spend_the_budget(monkeypatch):
-    monkeypatch.setenv("DECK_QA_ENABLED", "1")
+def test_build_fails_loud_when_b2_and_b3_spend_the_budget(qa_on, monkeypatch):
     monkeypatch.setenv("DECK_QA_TIMEOUT_S", "0")
     generator = _qa_generator()
 
     with _qa_build_env(generator, agent=_agent_passes_clean) as env:
-        result = _qa_build(generator)
+        with pytest.raises(DeckQaError, match="did not finish within"):
+            _qa_build(generator)
 
     env.agent.assert_not_called()
-    assert result["qa"]["timed_out"] is True
-    assert result["qa"]["cursor_passed"] is False
+    keys = [c.kwargs["Key"] for c in generator._s3.put_object.call_args_list]
+    assert not any(k.startswith("generated/") for k in keys)
+    # The synthetic timeout report was written into the uploaded package.
+    assert any(k.endswith("qa_cursor.json") for k in keys)

@@ -11,6 +11,8 @@ Vision-pass instructions: `.cursor/skills/deck-qa/SKILL.md` — read it before w
 
 Rail: C1 assemble → C2 fills → B2 review package → B3 deterministic QA → B4 headless Cursor vision QA → upload.
 
+The rail is **always on** — every `build_deck` runs it, and a timeout fails loud (`status: error` with `qa_report`), never a silent un-QA'd deck. `DECK_QA_DISABLED` (whole rail) and `DECK_QA_SKIP_VISION` (B4 only) are local-dev/emergency bypasses, never production config. `DECK_QA_ENABLED` is retired — do not reintroduce it.
+
 ## Hard rules
 
 Never edit slides with `editable: false` (A5 product clones — flag only) · no `search_decks` / Titan / RAG in the Creation path · no mix, ordering, or slide-count changes in QA · max **1** B4 fix loop, second failure is `status: error` with `qa_report` · key off the manifest's `editable` flag and `slide_kind`, never off slide position · fix text with `pptx_tools.set_ph_text` / `replace_token` / `replace_first_token`, never `apply_replacements` · `fixes_applied` must be truthful, the build path keys its deck re-load off it.

@@ -29,7 +29,7 @@ import pytest
 from pptx import Presentation
 
 from ingestion.confirm_mix import derive_cadence
-from ingestion.generator import DeckGenerator
+from ingestion.generator import DECK_QA_BYPASSED_WARNING, DeckGenerator
 from ingestion.gtm_product_map import load_gtm_product_map_from_s3
 from ingestion.placeholder_fills import (
     AUDIENCE_SEGMENT_TOKEN,
@@ -232,8 +232,10 @@ def test_golden_deck_passes_basic_checks():
     assert len(Presentation(io.BytesIO(buf.getvalue())).slides) == expected_slide_count()
 
 
-def test_build_returns_golden_slide_count():
+def test_build_returns_golden_slide_count(monkeypatch):
     """The slide_count build_deck hands back is 8 + P."""
+    # Geometry test only — bypass the always-on QA rail (no LibreOffice/Cursor here).
+    monkeypatch.setenv("DECK_QA_DISABLED", "1")
     generator = _generator()
     generator._s3.generate_presigned_url.return_value = "https://s3.example.com/deck.pptx"
 
@@ -257,7 +259,7 @@ def test_build_returns_golden_slide_count():
 
     assert result["slide_count"] == expected_slide_count()
     assert result["client_name"] == "BambooHR"
-    assert result["warnings"] == []
+    assert result["warnings"] == [DECK_QA_BYPASSED_WARNING]
 
 
 def _skip_if_no_bucket() -> str:

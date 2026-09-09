@@ -172,13 +172,13 @@ def build_deck(schema: dict, template_url: str | None = None) -> dict:
     header/body, audience title, and program one-liners. Unused audience/program
     variant pages are dropped.
 
-    With DECK_QA_ENABLED set, the deck then passes through the QA gate: a review
-    package (draft + slide PNGs + manifest), deterministic checks, and a headless
-    Cursor vision pass with at most one fix loop — product clones are flag-only.
-    The payload gains a qa{} block (deterministic_passed, cursor_passed, timed_out,
-    review_package_key). QA that overruns DECK_QA_TIMEOUT_S does not block delivery:
-    the deck ships with timed_out: true and a warning. See
-    docs/DECK-QA-ARCHITECTURE.md §8.
+    Every build then passes through the QA gate: a review package (draft + slide
+    PNGs + manifest), deterministic checks, and a headless Cursor vision pass with
+    at most one fix loop — product clones are flag-only. The payload gains a qa{}
+    block (deterministic_passed, cursor_passed, review_package_key). QA that
+    overruns DECK_QA_TIMEOUT_S fails loud (status: error with qa_report) — an
+    unreviewed deck is never delivered. DECK_QA_DISABLED / DECK_QA_SKIP_VISION are
+    local-dev/emergency bypasses only. See docs/DECK-QA-ARCHITECTURE.md §8.
 
     Uploads to S3 and returns a presigned download URL (24h) plus optional
     warnings[] (e.g. >6 audience segments truncated to the 6-card page).
