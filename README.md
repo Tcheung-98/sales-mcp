@@ -246,9 +246,12 @@ Known Product Tags coverage gaps (flag for GTM; do not invent substitutes):
 
 ## Repo layout
 
-- `server.py` — FastMCP app + tool handlers
+- `server.py` — FastMCP app (`build_deck`, `confirm_mix`)
 - `ingestion/generator.py` — FortuneAI assembly (`assemble_skeleton`, `build`)
 - `ingestion/placeholder_fills.py` — C2 deterministic + AI placeholder fills
 - `ingestion/gtm_product_map.py` — A5 exact product slide map
 - `ingestion/schema.py` — Discovery + Deck Pydantic models
+- `docs/END-SCOPE-SOT.md` — Canonical end-state contract
+- `docs/PROGRESS.md` — Living goal + ticket status
+- `docs/I1-DATA-SOURCES.md` — GTM + inventory S3 sync contract
 - `tests/` — unit tests (no live S3/Anthropic in default suite)
