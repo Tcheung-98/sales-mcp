@@ -8,7 +8,7 @@ The upstream caller — **Pitch Deck Builder**, **Sales HQ**, or any MCP client 
 GTM product clones (C1), fills stock placeholders (C2), optionally runs the deck QA rail, and
 uploads a PPTX. It does **not** ideate, propose a product menu, or choose the mix.
 
-End-scope SoT (sales-mcp checkout): `local/schema-driven-deck-generation-engine/END-SCOPE-SOT.md`.  
+End-scope SoT (sales-mcp checkout): `docs/END-SCOPE-SOT.md`.  
 Historical Prodie ideation design (not the runtime contract): [`docs/PRODIE-IDEATION-SPEC.md`](docs/PRODIE-IDEATION-SPEC.md).
 
 ---
@@ -158,8 +158,7 @@ Energy, Lifestyle, Luxury. Legacy `Tech` normalizes to `Technology`. Legacy
 (≥ $750k → GTM).
 
 **Primary path vs legacy helpers** — call `build_deck(deck_schema)` with the locked payload.
-There is **no `propose_mix` MCP tool**. `ingestion/logic_guide/` (`LogicGuideEngine`) is
-reference/test code only, not associate runtime. **`confirm_mix`** (I3 / PI-2761) is optional
+There is **no `propose_mix` MCP tool**. **`confirm_mix`** (I3 / PI-2761) is optional
 legacy: when the caller sends only `[{name, category?}, ...]`, it validates GTM identity,
 hydrates authoritative price/cadence from inventory, checks flight availability, and returns
 `deck_schema` for `build_deck`. Prefer sending the full `confirmed_products[]` directly.
@@ -214,7 +213,7 @@ Product Tags lookup and Audience Data load are separate passes over the same xls
 
 **GTM + inventory data (I1 / PI-2759)** — `build_deck` and optional `confirm_mix` read GTM DB +
 inventory calendar + pricing from S3 snapshots (SharePoint is human SoT). Access path, sheet
-contract, sync/ownership, and env defaults: [`local/schema-driven-deck-generation-engine/I1-DATA-SOURCES.md`](local/schema-driven-deck-generation-engine/I1-DATA-SOURCES.md).
+contract, sync/ownership, and env defaults: [`docs/I1-DATA-SOURCES.md`](docs/I1-DATA-SOURCES.md).
 Canonical keys: `ingestion/ideation_data_keys.py`. **Chunk B:** `ingestion/gtm_ideation_catalog.py`
 loads Product Category + Product Tags (`GTM TAGS` column) from the same xlsx; **Chunk C:**
 `ingestion/inventory_calendar.py` loads Products + Inventory tabs for flight availability;
@@ -247,9 +246,12 @@ Known Product Tags coverage gaps (flag for GTM; do not invent substitutes):
 
 ## Repo layout
 
-- `server.py` — FastMCP app + tool handlers
+- `server.py` — FastMCP app (`build_deck`, `confirm_mix`)
 - `ingestion/generator.py` — FortuneAI assembly (`assemble_skeleton`, `build`)
 - `ingestion/placeholder_fills.py` — C2 deterministic + AI placeholder fills
 - `ingestion/gtm_product_map.py` — A5 exact product slide map
 - `ingestion/schema.py` — Discovery + Deck Pydantic models
+- `docs/END-SCOPE-SOT.md` — Canonical end-state contract
+- `docs/PROGRESS.md` — Living goal + ticket status
+- `docs/I1-DATA-SOURCES.md` — GTM + inventory S3 sync contract
 - `tests/` — unit tests (no live S3/Anthropic in default suite)

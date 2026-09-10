@@ -15,7 +15,7 @@ from ingestion.confirm_mix import (
 )
 from ingestion.gtm_ideation_catalog import GtmIdeationCatalog
 from ingestion.inventory_workbook import InventoryWorkbook
-from tests.logic_guide_fixtures import base_discovery_fields, build_workbook_bytes
+from tests.gtm_fixtures import base_discovery_fields, build_workbook_bytes
 
 
 @pytest.fixture
