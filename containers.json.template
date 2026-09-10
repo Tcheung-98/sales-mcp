@@ -2,7 +2,9 @@
     "mcp": {
       "image": ":fortune-sales-mcp.vX.Y",
       "environment": {
-        "MCP_SHARED_SECRET": "REPLACE_WITH_OUTPUT_OF_openssl_rand_-hex_32"
+        "MCP_SHARED_SECRET": "REPLACE_WITH_OUTPUT_OF_openssl_rand_-hex_32",
+        "CURSOR_API_KEY": "REPLACE_WITH_CURSOR_API_KEY_FOR_B4_VISION_QA",
+        "DECK_QA_TIMEOUT_S": "600"
       },
       "ports": {
         "8000": "HTTP"

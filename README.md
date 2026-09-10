@@ -92,8 +92,13 @@ aws lightsail create-container-service-deployment \
   --public-endpoint file://public-endpoint.json
 ```
 
-`containers.json` contains `MCP_SHARED_SECRET` — never commit it. Use `containers.json.template`
-as reference. Generate a secret with `openssl rand -hex 32`.
+`containers.json` contains `MCP_SHARED_SECRET` and `CURSOR_API_KEY` — never commit it. Use
+`containers.json.template` as reference. Generate MCP auth with `openssl rand -hex 32`.
+
+Pushes to `main` / `dev` deploy via `.github/workflows/deploy.yml`. Before the first QA-enabled
+prod deploy, set GitHub Actions secrets `PROD_CURSOR_API_KEY` and `DEV_CURSOR_API_KEY` (repo
+Settings → Secrets). The workflow injects them as `CURSOR_API_KEY` on Lightsail plus
+`DECK_QA_TIMEOUT_S=600`.
 
 ---
 

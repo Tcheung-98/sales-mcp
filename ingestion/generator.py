@@ -693,7 +693,18 @@ class DeckGenerator:
                     report=report,
                 )
 
-            agent_report = run_headless_cursor_qa(package, timeout_s=remaining)
+            try:
+                agent_report = run_headless_cursor_qa(package, timeout_s=remaining)
+            except ValueError as exc:
+                report = CursorQaReport(
+                    passed=False,
+                    issues=[QaIssue(None, "error", str(exc))],
+                )
+                package.write_cursor_report(report)
+                raise DeckQaError(
+                    f"Headless deck QA could not start (review {review_id}): {exc}",
+                    report=report,
+                ) from exc
             # The runner cancels itself at its budget and reports the timeout as an
             # error issue, so a timed-out B4 fails here like any other non-pass:
             # the quality gate did not complete, so nothing ships (§8).

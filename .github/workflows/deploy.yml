@@ -11,17 +11,31 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Set environment variables
+        env:
+          PROD_CURSOR_API_KEY: ${{ secrets.PROD_CURSOR_API_KEY }}
+          DEV_CURSOR_API_KEY: ${{ secrets.DEV_CURSOR_API_KEY }}
         run: |
           if [ "${{ github.ref_name }}" == "main" ]; then
             echo "LIGHTSAIL_SERVICE=fortune-sales-mcp" >> "$GITHUB_ENV"
             echo "MCP_SHARED_SECRET=${{ secrets.PROD_MCP_SHARED_SECRET }}" >> "$GITHUB_ENV"
+            echo "CURSOR_API_KEY=$PROD_CURSOR_API_KEY" >> "$GITHUB_ENV"
             # Prod artifacts bucket is empty; use the populated dev bucket until synced.
             echo "S3_SNAPSHOT_BUCKET=fortune-sales-mcp-dev-artifacts" >> "$GITHUB_ENV"
+            if [ -z "$PROD_CURSOR_API_KEY" ]; then
+              echo "PROD_CURSOR_API_KEY GitHub secret is required for the always-on deck QA rail (B4)."
+              exit 1
+            fi
           else
             echo "LIGHTSAIL_SERVICE=fortune-sales-mcp-dev" >> "$GITHUB_ENV"
             echo "MCP_SHARED_SECRET=${{ secrets.DEV_MCP_SHARED_SECRET }}" >> "$GITHUB_ENV"
+            echo "CURSOR_API_KEY=$DEV_CURSOR_API_KEY" >> "$GITHUB_ENV"
             echo "S3_SNAPSHOT_BUCKET=fortune-sales-mcp-dev-artifacts" >> "$GITHUB_ENV"
+            if [ -z "$DEV_CURSOR_API_KEY" ]; then
+              echo "DEV_CURSOR_API_KEY GitHub secret is required for the always-on deck QA rail (B4)."
+              exit 1
+            fi
           fi
+          echo "DECK_QA_TIMEOUT_S=600" >> "$GITHUB_ENV"
 
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
@@ -70,7 +84,9 @@ jobs:
                 "AWS_ACCESS_KEY_ID": "$RUNTIME_AWS_ACCESS_KEY_ID",
                 "AWS_SECRET_ACCESS_KEY": "$RUNTIME_AWS_SECRET_ACCESS_KEY",
                 "AWS_DEFAULT_REGION": "us-east-1",
-                "S3_SNAPSHOT_BUCKET": "$S3_SNAPSHOT_BUCKET"
+                "S3_SNAPSHOT_BUCKET": "$S3_SNAPSHOT_BUCKET",
+                "CURSOR_API_KEY": "$CURSOR_API_KEY",
+                "DECK_QA_TIMEOUT_S": "$DECK_QA_TIMEOUT_S"
               },
               "ports": {
                 "8000": "HTTP"
