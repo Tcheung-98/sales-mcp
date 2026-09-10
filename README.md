@@ -158,8 +158,7 @@ Energy, Lifestyle, Luxury. Legacy `Tech` normalizes to `Technology`. Legacy
 (≥ $750k → GTM).
 
 **Primary path vs legacy helpers** — call `build_deck(deck_schema)` with the locked payload.
-There is **no `propose_mix` MCP tool**. `ingestion/logic_guide/` (`LogicGuideEngine`) is
-reference/test code only, not associate runtime. **`confirm_mix`** (I3 / PI-2761) is optional
+There is **no `propose_mix` MCP tool**. **`confirm_mix`** (I3 / PI-2761) is optional
 legacy: when the caller sends only `[{name, category?}, ...]`, it validates GTM identity,
 hydrates authoritative price/cadence from inventory, checks flight availability, and returns
 `deck_schema` for `build_deck`. Prefer sending the full `confirmed_products[]` directly.
