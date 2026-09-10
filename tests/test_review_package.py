@@ -39,7 +39,7 @@ from tests.fortuneai_placeholder_fixture import (
 _FORTUNEAI_URL = "https://fortune.sharepoint.com/sites/x/FortuneAI_DeckTemplate.pptx"
 
 # Product Name → (GTM Product Category, Deck Path, Slide #). Names and categories
-# are taken from tests/logic_guide_fixtures.py::REPRESENTATIVE_GTM_ROWS.
+# are taken from tests/gtm_fixtures.py::REPRESENTATIVE_GTM_ROWS.
 _GTM_ROWS: dict[str, tuple[str, str, int]] = {
     "CEO Daily": ("Newsletters", "Fortune_Newsletters_2026.pptx", 3),
     "Term Sheet": ("Newsletters", "Fortune_Newsletters_2026.pptx", 7),

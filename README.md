@@ -8,7 +8,7 @@ The upstream caller — **Pitch Deck Builder**, **Sales HQ**, or any MCP client 
 GTM product clones (C1), fills stock placeholders (C2), optionally runs the deck QA rail, and
 uploads a PPTX. It does **not** ideate, propose a product menu, or choose the mix.
 
-End-scope SoT (sales-mcp checkout): `local/schema-driven-deck-generation-engine/END-SCOPE-SOT.md`.  
+End-scope SoT (sales-mcp checkout): `docs/END-SCOPE-SOT.md`.  
 Historical Prodie ideation design (not the runtime contract): [`docs/PRODIE-IDEATION-SPEC.md`](docs/PRODIE-IDEATION-SPEC.md).
 
 ---
@@ -213,7 +213,7 @@ Product Tags lookup and Audience Data load are separate passes over the same xls
 
 **GTM + inventory data (I1 / PI-2759)** — `build_deck` and optional `confirm_mix` read GTM DB +
 inventory calendar + pricing from S3 snapshots (SharePoint is human SoT). Access path, sheet
-contract, sync/ownership, and env defaults: [`local/schema-driven-deck-generation-engine/I1-DATA-SOURCES.md`](local/schema-driven-deck-generation-engine/I1-DATA-SOURCES.md).
+contract, sync/ownership, and env defaults: [`docs/I1-DATA-SOURCES.md`](docs/I1-DATA-SOURCES.md).
 Canonical keys: `ingestion/ideation_data_keys.py`. **Chunk B:** `ingestion/gtm_ideation_catalog.py`
 loads Product Category + Product Tags (`GTM TAGS` column) from the same xlsx; **Chunk C:**
 `ingestion/inventory_calendar.py` loads Products + Inventory tabs for flight availability;

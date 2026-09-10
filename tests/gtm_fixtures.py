@@ -1,4 +1,4 @@
-"""Representative Logic Guide workbook fixtures (PI-2760 merge blockers)."""
+"""Representative GTM workbook fixtures for confirm_mix and golden tests."""
 
 from __future__ import annotations
 
@@ -6,10 +6,6 @@ import io
 from datetime import date
 
 from openpyxl import Workbook
-
-from ingestion.gtm_ideation_catalog import GtmIdeationCatalog
-from ingestion.inventory_workbook import InventoryWorkbook
-from ingestion.logic_guide.engine import LogicGuideEngine
 
 # --- GTM Product Tags rows: (category, name, tags, deck, slide) ---
 REPRESENTATIVE_GTM_ROWS: list[tuple] = [
@@ -116,7 +112,6 @@ REPRESENTATIVE_GTM_ROWS: list[tuple] = [
 # (section, product, pricing)
 REPRESENTATIVE_PRICING_ROWS: list[tuple[str, str, str]] = [
     ("NEWSLETTERS", "CEO Daily", "$5,000/day"),
-    # Single Term Sheet row — pricing sheet is keyed by product name only.
     ("NEWSLETTERS", "Term Sheet", "$6,000/day"),
     ("VODCASTS", "Fortune Tech", "$7,000/day"),
     ("DIGITAL MEDIA", "Crown Unit", "$25,000"),
@@ -131,7 +126,6 @@ REPRESENTATIVE_PRICING_ROWS: list[tuple[str, str, str]] = [
     ("PRINT", "Full Page", "$35,000"),
 ]
 
-# Inventory Products tab rows gated for availability checks
 REPRESENTATIVE_INVENTORY_PRODUCTS: list[tuple] = [
     (
         "CEO Daily",
@@ -161,7 +155,6 @@ REPRESENTATIVE_INVENTORY_PRODUCTS: list[tuple] = [
     ),
 ]
 
-# (date, day, week, month, type, product, status)
 REPRESENTATIVE_INVENTORY_SLOTS: list[tuple] = [
     (date(2026, 9, 1), "Tue", 36, "Sep", "Newsletter", "CEO Daily", "Available"),
     (date(2026, 9, 1), "Tue", 36, "Sep", "Newsletter", "Term Sheet", "Available"),
@@ -255,14 +248,6 @@ def build_workbook_bytes(
     buf = io.BytesIO()
     wb.save(buf)
     return buf.getvalue()
-
-
-def build_representative_engine() -> LogicGuideEngine:
-    data = build_workbook_bytes()
-    return LogicGuideEngine(
-        GtmIdeationCatalog.from_xlsx_bytes(data),
-        InventoryWorkbook.from_xlsx_bytes(data),
-    )
 
 
 def base_discovery_fields(**overrides) -> dict:
