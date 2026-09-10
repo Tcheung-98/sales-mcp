@@ -37,6 +37,9 @@ build/
 .idea/
 .claude/
 
+# Local build artifacts and MCP call dumps
+output/
+
 # Internal
 _internal/
 

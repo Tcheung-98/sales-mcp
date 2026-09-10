@@ -15,4 +15,4 @@ The rail is **always on** — every `build_deck` runs it, and a timeout fails lo
 
 ## Hard rules
 
-Never edit slides with `editable: false` (A5 product clones — flag only) · no `search_decks` / Titan / RAG in the Creation path · no mix, ordering, or slide-count changes in QA · max **1** B4 fix loop, second failure is `status: error` with `qa_report` · key off the manifest's `editable` flag and `slide_kind`, never off slide position · fix text with `pptx_tools.set_ph_text` / `replace_token` / `replace_first_token`, never `apply_replacements` · `fixes_applied` must be truthful, the build path keys its deck re-load off it.
+Never edit slides with `editable: false` (A5 product clones — flag only) · no mix, ordering, or slide-count changes in QA · max **1** B4 fix loop, second failure is `status: error` with `qa_report` · key off the manifest's `editable` flag and `slide_kind`, never off slide position · fix text with `pptx_tools.set_ph_text` / `replace_token` / `replace_first_token` · `fixes_applied` must be truthful, the build path keys its deck re-load off it.

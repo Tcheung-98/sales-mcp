@@ -286,6 +286,6 @@ PYTHONPATH=. uv run python tests/smoke_build_live.py --mock-ai
 
 ### Golden test guidance
 
-Prefer offline fixtures using product names from `tests/logic_guide_fixtures.py` (`Crown Unit`, `CEO Daily`, `Term Sheet`, `Long-Form Article`, `Full Page`) with a fixture `GtmProductMap`. The assertion that matters is `slide_count == 8 + P` per §5, not specific dollar figures.
+Prefer offline fixtures using product names from `tests/gtm_fixtures.py` (`Crown Unit`, `CEO Daily`, `Term Sheet`, `Long-Form Article`, `Full Page`) with a fixture `GtmProductMap`. The assertion that matters is `slide_count == 8 + P` per §5, not specific dollar figures.
 
 If testing against live S3/GTM, confirm product names and prices against `GTM_DATABASE_KEY` and the inventory Pricing sheet before asserting end-to-end behavior.

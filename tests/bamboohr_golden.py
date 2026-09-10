@@ -1,6 +1,6 @@
 """BambooHR Tier 1 golden fixture (Deck QA architecture §12, option 1).
 
-Product names are verbatim from ``tests.logic_guide_fixtures``
+Product names are verbatim from ``tests.gtm_fixtures``
 ``REPRESENTATIVE_GTM_ROWS`` — the only Product Tags rows the repo confirms
 exist — so ``GtmProductMap.lookup`` resolves here and against the live workbook.
 Prices are whole multiples of the matching ``REPRESENTATIVE_PRICING_ROWS`` rate
@@ -31,7 +31,7 @@ from ingestion.gtm_product_map import (
 from ingestion.placeholder_fills import funded_divider_buckets
 from ingestion.schema import DeckSchema, Product
 from tests.fortuneai_placeholder_fixture import build_fortuneai_fixture_prs
-from tests.logic_guide_fixtures import REPRESENTATIVE_GTM_ROWS
+from tests.gtm_fixtures import REPRESENTATIVE_GTM_ROWS
 
 BAMBOOHR_TIER1_BUDGET = 400_000.0
 
