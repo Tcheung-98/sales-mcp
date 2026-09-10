@@ -30,14 +30,9 @@ cp .env.example .env
 
 | Variable | Description |
 |---|---|
-| `GRAPH_TENANT_ID` | Azure AD tenant ID |
-| `GRAPH_CLIENT_ID` | Azure AD app registration client ID |
-| `GRAPH_CLIENT_SECRET` | Azure AD app registration client secret |
-| `SHAREPOINT_SITE_ID` | SharePoint site ID (`hostname,site-guid,web-guid`) |
 | `S3_SNAPSHOT_BUCKET` | S3 bucket (`fortune-sales-mcp-dev-artifacts` for dev) |
 | `ANTHROPIC_API_KEY` | Anthropic API key (local dev only — prod uses Secrets Manager) |
 | `MCP_SHARED_SECRET` | Bearer token for Cowork → MCP auth |
-| `RULEBOOK_KEY` | S3 key for Fortune GTM skill doc (default: `templates/rulebook.docx`) |
 | `GTM_DATABASE_KEY` | S3 key for `Fortune_AITool_GTM_Database.xlsx` (default: `templates/Fortune_AITool_GTM_Database.xlsx`) |
 | `INVENTORY_CALENDAR_KEY` | S3 key for inventory + pricing workbook (default: `templates/Fortune_Inventory_Reservation_Calendar_2026_Final.xlsx`) |
 | `PRODUCT_DECKS_PREFIX` | S3 prefix for Hunter product decks referenced by Deck Path (default: `product-decks/`) |
@@ -64,21 +59,6 @@ npx @modelcontextprotocol/inspector http://localhost:8000/mcp
 ```
 
 Set `Authorization: Bearer <MCP_SHARED_SECRET>` in the inspector's auth settings.
-
----
-
-## Ingestion
-
-Walks the SharePoint GTM library, parses all `.pptx` decks, uploads PPTX files to S3 corpus,
-and regenerates the embeddings snapshot.
-
-```bash
-uv run python scratch/run_ingest.py
-```
-
-Output:
-- `s3://bucket/corpus/{deck_id}.pptx` — source PPTX files for cloning
-- `s3://bucket/snapshots/{run_ts}/` — embeddings + slide metadata
 
 ---
 
@@ -143,9 +123,9 @@ curl -s -X POST https://fortune-sales-mcp.tj3ek8xjdg9br.us-east-1.cs.amazonlight
 
 ## Architecture decisions
 
-**Corpus-clone approach** — slides are cloned from real Fortune closed-won decks, not generated
-programmatically. Visual quality (typography, shapes, imagery) is preserved from the source.
-Client-specific text is replaced post-clone via placeholder targeting.
+**Corpus-clone approach** — product slides are cloned from exact GTM `Deck Path` + `Slide #`
+(Hunter product decks on S3), not generated programmatically. Stock FortuneAI slides keep
+template typography; client-specific text is filled via the C2 placeholder pipeline.
 
 **Schema-driven generation** — the primary path is `build_deck(full DeckSchema)`. The caller owns
 Discovery intake and product lock upstream; this server consumes a fully hydrated `DeckSchema`
@@ -254,9 +234,6 @@ Known Product Tags coverage gaps (flag for GTM; do not invent substitutes):
 - Duplicate Branded Content rows (same name/path/slide, different GTM TAGS) — deduped as one
 - `Term Sheet` / `Next To Lead` appear in both Newsletters and Vodcasts — category required
 
-**Titan / RAG (legacy research)** — `search_decks`, `filter_decks_by_tags`, and corpus embeddings
-remain for research and ingest. They are **not** the Creation path (exact GTM map only).
-
 ---
 
 ## MCP tools
@@ -265,9 +242,6 @@ remain for research and ingest. They are **not** the Creation path (exact GTM ma
 |---|---|
 | `build_deck` | Primary Creation path: validate `DeckSchema`, C1 assemble + C2 fills → presigned PPTX URL |
 | `confirm_mix` | Optional legacy: validate name+category list, hydrate prices → `deck_schema` for `build_deck` |
-| `search_decks` | Semantic slide search (legacy research; not Creation) |
-| `filter_decks_by_tags` | Tag filter on corpus metadata |
-| `get_slide_content` | Fetch slide text for a deck id |
 
 ---
 
